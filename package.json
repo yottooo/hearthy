@@ -1,0 +1,58 @@
+{
+  "name": "hearthy",
+  "version": "0.1.0",
+  "description": "Your documents, your hardware: a local RAG CLI in TypeScript, powered by Ollama and pgvector.",
+  "type": "module",
+  "bin": {
+    "hearthy": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down"
+  },
+  "keywords": [
+    "rag",
+    "llm",
+    "ollama",
+    "pgvector",
+    "local-ai",
+    "cli",
+    "typescript"
+  ],
+  "author": "yottooo (https://github.com/yottooo)",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^15.0.0",
+    "ollama": "^0.6.4",
+    "pg": "^8.23.1",
+    "pgvector": "^0.3.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "eslint": "^10.13.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.0",
+    "vitest": "^5.0.5"
+  }
+}
