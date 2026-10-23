@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 import { existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { Command, InvalidArgumentError } from 'commander';
 import { type Config, loadConfig } from './config.js';
 import { connect, type Pool } from './db/client.js';
 import { assertSchema, dropSchema, migrate } from './db/migrate.js';
 import { HearthyError } from './errors.js';
+import { loadDataset } from './eval/dataset.js';
+import { runEval } from './eval/run.js';
 import { ingest } from './ingest/ingest.js';
 import { displayPath } from './ingest/loader.js';
 import { LocalModels } from './llm/ollama.js';
@@ -71,6 +75,56 @@ program
         { topK: opts.topK ?? config.topK, showContext: opts.showContext },
       );
     }),
+  );
+
+program
+  .command('eval')
+  .description('score retrieval and answers against a dataset of questions with known answers')
+  .argument('[dataset]', 'eval dataset (JSON)', 'evals/examples.json')
+  .option('-k, --top-k <n>', 'number of passages to retrieve', positiveInt)
+  .option('-r, --repeat <n>', 'generate each answer n times to measure consistency', positiveInt, 1)
+  .option('--retrieval-only', 'skip answer generation (fast, needs only the embedding model)')
+  .option('--judge [model]', 'also grade faithfulness with an LLM judge (default: CHAT_MODEL)')
+  .option('-f, --filter <text>', 'only run cases whose id or category contains this text')
+  .action(
+    (
+      datasetPath: string,
+      opts: {
+        topK?: number;
+        repeat: number;
+        retrievalOnly?: boolean;
+        judge?: boolean | string;
+        filter?: string;
+      },
+    ) =>
+      withDatabase(async (pool, config) => {
+        await assertSchema(pool, config);
+        const dataset = await loadDataset(datasetPath);
+        const report = await runEval(
+          dataset,
+          { pool, models: new LocalModels(config), config },
+          {
+            topK: opts.topK ?? config.topK,
+            repeat: opts.repeat,
+            retrievalOnly: opts.retrievalOnly ?? false,
+            judgeModel:
+              opts.judge === true
+                ? config.chatModel
+                : typeof opts.judge === 'string'
+                  ? opts.judge
+                  : null,
+            filter: opts.filter,
+          },
+        );
+
+        // Saved reports make it easy to compare models, chunk sizes or prompt changes over time.
+        const stamp = report.createdAt.replace(/[:.]/g, '-');
+        const model = report.settings.chatModel.replace(/[^\w.-]+/g, '_');
+        const file = path.join('evals', 'results', `${stamp}-${model}.json`);
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, JSON.stringify(report, null, 2));
+        console.log(`\nFull report: ${file.replaceAll('\\', '/')}`);
+      }),
   );
 
 program

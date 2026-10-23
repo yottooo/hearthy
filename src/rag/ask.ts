@@ -2,7 +2,7 @@ import type { Pool } from '../db/client.js';
 import { displayPath } from '../ingest/loader.js';
 import type { LocalModels } from '../llm/ollama.js';
 import { buildMessages, citedPassages } from './prompt.js';
-import { retrieve } from './retrieve.js';
+import { retrieve, type RetrievedChunk } from './retrieve.js';
 
 export interface AskOptions {
   topK: number;
@@ -10,14 +10,44 @@ export interface AskOptions {
   showContext?: boolean;
 }
 
-export async function ask(
+export interface Answer {
+  text: string;
+  /** 1-based passage numbers the answer cites. */
+  cited: Set<number>;
+}
+
+/** Step 1 of RAG: embed the question and fetch the nearest chunks. */
+export async function retrieveFor(
   question: string,
   { pool, models }: { pool: Pool; models: LocalModels },
+  topK: number,
+): Promise<RetrievedChunk[]> {
+  const [queryEmbedding] = await models.embed([question], 'query');
+  return retrieve(pool, queryEmbedding!, topK);
+}
+
+/** Step 2 of RAG: have the chat model answer from the retrieved chunks. */
+export async function generateAnswer(
+  question: string,
+  chunks: RetrievedChunk[],
+  models: LocalModels,
+  onToken: (token: string) => void = () => {},
+): Promise<Answer> {
+  let text = '';
+  for await (const token of models.streamChat(buildMessages(question, chunks, displayPath))) {
+    text += token;
+    onToken(token);
+  }
+  return { text, cited: citedPassages(text, chunks.length) };
+}
+
+export async function ask(
+  question: string,
+  deps: { pool: Pool; models: LocalModels },
   { topK, showContext = false }: AskOptions,
   write: (text: string) => void = (text) => process.stdout.write(text),
 ): Promise<void> {
-  const [queryEmbedding] = await models.embed([question], 'query');
-  const chunks = await retrieve(pool, queryEmbedding!, topK);
+  const chunks = await retrieveFor(question, deps, topK);
 
   if (chunks.length === 0) {
     write('No documents ingested yet. Run: hearthy ingest <path>\n');
@@ -32,14 +62,9 @@ export async function ask(
     write('\n');
   }
 
-  let answer = '';
-  for await (const token of models.streamChat(buildMessages(question, chunks, displayPath))) {
-    answer += token;
-    write(token);
-  }
+  const { cited } = await generateAnswer(question, chunks, deps.models, write);
 
   // Cited passages first, so an answer that cites nothing (or the wrong thing) is easy to spot.
-  const cited = citedPassages(answer, chunks.length);
   const source = (i: number) =>
     `  [${i + 1}] ${displayPath(chunks[i]!.path)} (chunk ${chunks[i]!.ord + 1})\n`;
   const indices = [...chunks.keys()];
