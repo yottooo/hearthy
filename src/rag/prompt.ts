@@ -9,6 +9,17 @@ Rules:
 - If the context does not contain the answer, say that you could not find it in the documents.
 - Be concise and direct.`;
 
+/** Passage numbers the answer actually cites, e.g. "[1]", "[2][3]" or "[1, 4]", ignoring out-of-range ones. */
+export function citedPassages(answer: string, passageCount: number): Set<number> {
+  const cited = new Set<number>();
+  for (const [, group] of answer.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)) {
+    for (const n of group!.split(',').map(Number)) {
+      if (n >= 1 && n <= passageCount) cited.add(n);
+    }
+  }
+  return cited;
+}
+
 /** Builds the chat messages: rules in the system prompt, numbered passages plus the question as the user turn. */
 export function buildMessages(
   question: string,

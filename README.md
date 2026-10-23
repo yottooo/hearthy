@@ -14,16 +14,22 @@ Postgres + [pgvector](https://github.com/pgvector/pgvector). No API keys, and no
 machine.
 
 ```text
-$ hearthy ask "What does error E4 mean on the kettle?"
+$ hearthy ask "Who do I page if production is down at night?"
 
-Error E4 means the dry-boil protection was triggered: the kettle is empty. Let it cool
-for 5 minutes, then refill it [1].
+According to [1], if production is down between 19:00 and 08:00, page the on-call engineer
+through the Pager app. If they don't acknowledge within 15 minutes, the page escalates to the
+Head of Engineering, Mira Petrova.
 
 Sources:
-  [1] examples/docs/kettle-k2-manual.md (chunk 2)
-  [2] examples/docs/kettle-k2-manual.md (chunk 3)
+  [1] examples/docs/emberlight-handbook.md (chunk 3)
+
+Also retrieved:
+  [2] examples/docs/emberlight-handbook.md (chunk 1)
+  [3] examples/docs/kettle-k2-manual.md (chunk 2)
   ...
 ```
+
+Real output from `llama3.1:8b` on an RTX 3070, using the [example documents](examples/docs).
 
 ## How it works
 
@@ -59,6 +65,9 @@ flowchart LR
 Hearthy is developed on an **Intel i7-4770 with an RTX 3070 (8 GB VRAM)**. The defaults are chosen so
 that the chat model and the embedding model both fit on an 8 GB card at the same time, with room left
 for an 8K context window. The old CPU only reads files and talks HTTP, so it is not the bottleneck.
+
+On that machine, `ollama ps` shows `llama3.1:8b` at 5.8 GB (with the 8K context) and
+`nomic-embed-text` at 0.3 GB, both running 100% on the GPU.
 
 Pick a chat model that fits your GPU and set `CHAT_MODEL` in `.env`:
 
@@ -120,7 +129,7 @@ The embedding model (`nomic-embed-text`, ~0.3 GB) is small enough to sit alongsi
    ```
 
    The examples describe a made-up kettle and company, so the model can only get these answers
-   right by retrieving them. See [examples/docs/README.md](examples/docs/README.md) for more
+   right by retrieving them. See [examples/README.md](examples/README.md) for more
    questions. Then point it at your own folders.
 
 ## Commands

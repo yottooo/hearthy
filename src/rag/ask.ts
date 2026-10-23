@@ -1,7 +1,7 @@
 import type { Pool } from '../db/client.js';
 import { displayPath } from '../ingest/loader.js';
 import type { LocalModels } from '../llm/ollama.js';
-import { buildMessages } from './prompt.js';
+import { buildMessages, citedPassages } from './prompt.js';
 import { retrieve } from './retrieve.js';
 
 export interface AskOptions {
@@ -32,12 +32,25 @@ export async function ask(
     write('\n');
   }
 
+  let answer = '';
   for await (const token of models.streamChat(buildMessages(question, chunks, displayPath))) {
+    answer += token;
     write(token);
   }
 
+  // Cited passages first, so an answer that cites nothing (or the wrong thing) is easy to spot.
+  const cited = citedPassages(answer, chunks.length);
+  const source = (i: number) =>
+    `  [${i + 1}] ${displayPath(chunks[i]!.path)} (chunk ${chunks[i]!.ord + 1})\n`;
+  const indices = [...chunks.keys()];
+
   write('\n\nSources:\n');
-  for (const [i, chunk] of chunks.entries()) {
-    write(`  [${i + 1}] ${displayPath(chunk.path)} (chunk ${chunk.ord + 1})\n`);
+  if (cited.size === 0) write('  (the answer cites no passages)\n');
+  for (const i of indices.filter((i) => cited.has(i + 1))) write(source(i));
+
+  const uncited = indices.filter((i) => !cited.has(i + 1));
+  if (uncited.length > 0) {
+    write('\nAlso retrieved:\n');
+    for (const i of uncited) write(source(i));
   }
 }

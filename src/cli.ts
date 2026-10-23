@@ -43,7 +43,8 @@ program
         { pool, embedder: new LocalModels(config), config },
         ({ path, status, chunks }) => {
           const mark = { added: '+', updated: '~', unchanged: '=' }[status];
-          const detail = status === 'unchanged' ? 'unchanged' : `${chunks} chunks`;
+          const detail =
+            status === 'unchanged' ? 'unchanged' : `${chunks} chunk${chunks === 1 ? '' : 's'}`;
           console.log(`  ${mark} ${displayPath(path)} (${detail})`);
         },
       );

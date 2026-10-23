@@ -3,7 +3,7 @@ import { DEFAULTS, loadConfig, redactUrl } from '../src/config.js';
 import { HearthyError, isConnectionRefused } from '../src/errors.js';
 import { displayPath } from '../src/ingest/loader.js';
 import { embedPrefix, hasModel } from '../src/llm/ollama.js';
-import { buildMessages, SYSTEM_PROMPT } from '../src/rag/prompt.js';
+import { buildMessages, citedPassages, SYSTEM_PROMPT } from '../src/rag/prompt.js';
 
 describe('loadConfig', () => {
   it('uses defaults for unset or empty variables', () => {
@@ -84,5 +84,15 @@ describe('buildMessages', () => {
     expect(user).toContain('[1] (source: kettle.md)\nE4 means the kettle is dry.');
     expect(user).toContain('[2] (source: faq.md)\nDescale monthly.');
     expect(user.endsWith('Question: What is E4?')).toBe(true);
+  });
+});
+
+describe('citedPassages', () => {
+  it('collects single, adjacent and comma-separated citations', () => {
+    expect(citedPassages('See [1]. Also [2][4] and [3, 5].', 5)).toEqual(new Set([1, 2, 3, 4, 5]));
+  });
+
+  it('ignores numbers outside the retrieved range and non-citations', () => {
+    expect(citedPassages('As [0] and [9] say, use array[i] or [x].', 5)).toEqual(new Set());
   });
 });
