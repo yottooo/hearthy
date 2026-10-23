@@ -1,0 +1,166 @@
+{
+  "name": "examples",
+  "documents": "../examples/docs",
+  "cases": [
+    {
+      "id": "kettle-e4",
+      "category": "lookup",
+      "question": "What does error E4 mean on the kettle?",
+      "expect": "answer",
+      "evidence": ["Dry-boil protection triggered"],
+      "mustInclude": [["empty", "dry", "no water"]]
+    },
+    {
+      "id": "core-hours",
+      "category": "lookup",
+      "question": "What are Emberlight's core hours?",
+      "expect": "answer",
+      "evidence": ["Core hours are 10:00 to 15:00"],
+      "mustInclude": [
+        ["10:00", "10 am", "10am", "10 a.m."],
+        ["15:00", "3 pm", "3pm", "3 p.m."]
+      ]
+    },
+    {
+      "id": "oncall-bonus",
+      "category": "lookup",
+      "question": "How much extra is an on-call week paid?",
+      "expect": "answer",
+      "evidence": ["paid an extra 150 EUR"],
+      "mustInclude": [["150"]]
+    },
+    {
+      "id": "green-tea",
+      "category": "lookup",
+      "question": "What temperature is the green tea preset on the kettle?",
+      "expect": "answer",
+      "evidence": ["70°C (green tea)"],
+      "mustInclude": [["70"]]
+    },
+    {
+      "id": "no-water",
+      "category": "paraphrase",
+      "question": "My kettle has no water in it. What error will it show?",
+      "expect": "answer",
+      "evidence": ["Dry-boil protection triggered"],
+      "mustInclude": [["E4"]]
+    },
+    {
+      "id": "work-from-home",
+      "category": "paraphrase",
+      "question": "Can I work from my house?",
+      "expect": "answer",
+      "evidence": ["3 days a week"],
+      "mustInclude": [["3 days", "three days"]]
+    },
+    {
+      "id": "glass-guarantee",
+      "category": "paraphrase",
+      "question": "How long is the guarantee on the glass?",
+      "expect": "answer",
+      "evidence": ["The glass body is covered for 1 year"],
+      "mustInclude": [["1 year", "one year", "12 months"]]
+    },
+    {
+      "id": "laptop-budget",
+      "category": "paraphrase",
+      "question": "How much money do I get for a new computer?",
+      "expect": "answer",
+      "evidence": ["up to 2,500 EUR"],
+      "mustInclude": [["2,500", "2500", "2.500"]]
+    },
+    {
+      "id": "descale-steps",
+      "category": "multi-part",
+      "question": "How do I descale the kettle, step by step?",
+      "expect": "answer",
+      "evidence": ["1:1 mix of water and white vinegar"],
+      "mustInclude": [["vinegar"], ["20 minutes", "twenty minutes"], ["twice", "two times"]]
+    },
+    {
+      "id": "holiday-rules",
+      "category": "multi-part",
+      "question": "What are the rules for holiday days?",
+      "expect": "answer",
+      "evidence": ["25 days of paid holiday"],
+      "mustInclude": [["25"], ["5", "five"], ["31 March", "March 31"]]
+    },
+    {
+      "id": "oncall-escalation",
+      "category": "multi-part",
+      "question": "What happens if the on-call engineer doesn't respond to a page?",
+      "expect": "answer",
+      "evidence": ["escalates to the Head of Engineering"],
+      "mustInclude": [
+        ["15 minutes", "fifteen minutes"],
+        ["Mira Petrova", "Head of Engineering"]
+      ]
+    },
+    {
+      "id": "e3-prevention",
+      "category": "cross-section",
+      "question": "What does E3 mean, and how often should I descale to prevent it?",
+      "expect": "answer",
+      "evidence": ["Scale build-up detected", "Descale every 6 weeks"],
+      "mustInclude": [["scale"], ["6 weeks", "six weeks"]]
+    },
+    {
+      "id": "oncall-incident",
+      "category": "cross-section",
+      "question": "What do I get for an on-call week that had a 2-hour incident at night?",
+      "expect": "answer",
+      "evidence": ["time off in lieu"],
+      "mustInclude": [["150"], ["time off", "lieu"]]
+    },
+    {
+      "id": "kettle-price",
+      "category": "unanswerable",
+      "question": "How much does the K2 kettle cost?",
+      "expect": "refuse"
+    },
+    {
+      "id": "employee-count",
+      "category": "unanswerable",
+      "question": "How many employees does Emberlight have?",
+      "expect": "refuse"
+    },
+    {
+      "id": "capital-france",
+      "category": "unanswerable",
+      "question": "What is the capital of France?",
+      "expect": "refuse",
+      "mustNotInclude": ["Paris"]
+    },
+    {
+      "id": "coffee",
+      "category": "unanswerable",
+      "question": "How do I make a good cup of coffee?",
+      "expect": "refuse",
+      "mustNotInclude": ["grind", "beans"]
+    },
+    {
+      "id": "e6-lid",
+      "category": "false-premise",
+      "question": "Why does error E6 mean the lid is open?",
+      "expect": "refuse",
+      "evidence": ["Firmware update failed"],
+      "mustNotInclude": ["because the lid"]
+    },
+    {
+      "id": "rollover-10",
+      "category": "false-premise",
+      "question": "Can I roll over 10 holiday days to next year?",
+      "expect": "answer",
+      "evidence": ["Up to 5 unused days roll over"],
+      "mustInclude": [["5", "five"]]
+    },
+    {
+      "id": "wednesday-office",
+      "category": "false-premise",
+      "question": "Is Wednesday the office day at Emberlight?",
+      "expect": "answer",
+      "evidence": ["Tuesdays are office days"],
+      "mustInclude": [["Tuesday"]]
+    }
+  ]
+}
