@@ -71,6 +71,20 @@ export class LocalModels implements Embedder {
     }
   }
 
+  /** One deterministic reply constrained to a JSON schema, e.g. for grading. */
+  async completeJson<T>(messages: Message[], schema: object): Promise<T> {
+    const { chatModel, numCtx } = this.config;
+    const response = await this.call(chatModel, () =>
+      this.client.chat({
+        model: chatModel,
+        messages,
+        format: schema,
+        options: { num_ctx: numCtx, temperature: 0 },
+      }),
+    );
+    return JSON.parse(response.message.content) as T;
+  }
+
   /** Names of locally pulled models, e.g. "llama3.1:8b" or "nomic-embed-text:latest". */
   async listModels(): Promise<string[]> {
     const { models } = await this.call(null, () => this.client.list());
