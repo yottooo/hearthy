@@ -1,0 +1,286 @@
+Yoke project notes
+Source: analysis of the Yoke repository (C:\Users\yo\Desktop\projects\yoke), 25 October 2026.
+Each section below is written to stand on its own, so it can be retrieved without the rest.
+
+# Yoke: what it is
+
+Yoke is a project hub with real-time chat, built by yottooo. It keeps a team's projects, a Jira-style task board and a per-project chat in one place.
+
+It is an npm workspaces monorepo with two apps:
+- apps/api: a NestJS 11 API (Express platform) with TypeORM, PostgreSQL, Redis caching, JWT auth and Socket.IO.
+- apps/web: a React 19 + Vite web app with a project list, a drag-and-drop task board and a floating chat widget.
+
+PostgreSQL, pgAdmin and Redis run in Docker Compose; the two apps run with Node on the host. The repository has about 100 commits, from 1 May 2026 to 25 October 2026. The license is MIT.
+
+# Yoke: one-paragraph pitch for interviews
+
+"Yoke is a full-stack TypeScript project hub I built: NestJS + TypeORM + Postgres on the back end, React 19 + TanStack Query on the front end, connected by REST and Socket.IO. Users sign up and log in with JWT, create projects, manage tasks on a drag-and-drop Kanban board, and chat per project in real time. Task changes are broadcast to everyone viewing the same board through Socket.IO rooms, driven by domain events from EventEmitter2, and the client simply refetches the affected project's tasks. Project reads are cached in Redis with cache-aside and explicit invalidation. Card order uses fractional positions, so a drag only updates one row."
+
+# Yoke: tech stack (back end, apps/api)
+
+- NestJS 11 on @nestjs/platform-express, TypeScript 5.7, target ES2023, module nodenext.
+- TypeORM 0.3 with the pg driver, PostgreSQL 15 (postgres:15-alpine in Docker).
+- Migrations through the TypeORM CLI (typeorm-ts-node-commonjs), synchronize is false.
+- Redis 7 through ioredis, provided by a global RedisModule under the injection token REDIS.
+- @nestjs/jwt for signing and verifying tokens, bcrypt (10 salt rounds) for password hashes.
+- class-validator + class-transformer DTOs with a global ValidationPipe (whitelist: true, transform: true).
+- @nestjs/websockets + @nestjs/platform-socket.io (Socket.IO 4.8) for chat and task events.
+- @nestjs/event-emitter (EventEmitter2) for in-process domain events.
+- @nestjs/config with ConfigModule.forRoot({ isGlobal: true }).
+- Jest 30 + ts-jest + supertest for unit and e2e tests; ESLint 9 + Prettier.
+
+# Yoke: tech stack (front end, apps/web)
+
+- React 19 + Vite 8 + TypeScript 5.9.
+- React Router 8 (createBrowserRouter, nested layout routes).
+- TanStack Query 5 for server state (staleTime 10 s, retry 1).
+- socket.io-client 4.8, one shared socket for the whole app.
+- dnd-kit (@dnd-kit/core, @dnd-kit/sortable) for the Kanban board drag and drop.
+- Tailwind CSS 4 + shadcn/ui components (Radix UI), lucide-react icons, Geist font.
+- oxlint for linting. The "@" import alias points to src/.
+
+# Yoke: repository layout
+
+Root: package.json (workspaces apps/*, scripts dev, dev:api, dev:web, build using concurrently), docker-compose.yml, .env (shared by Docker Compose and the API), docs/.
+
+apps/api/src:
+- main.ts (bootstrap, global ValidationPipe, port from PORT or 3000)
+- app.module.ts, app.controller.ts (GET / hello, GET /db-test), health.entity.ts
+- auth/ (controller, service, guard, DTOs, JwtPayload and AuthenticatedRequest types)
+- users/ (User entity, UsersService, no controller)
+- projects/ (entity, DTOs, controller, service with Redis caching)
+- tasks/ (entity, DTOs, controller, service, TasksGateway)
+- chat/ (ChatGateway)
+- redis/ (global RedisModule)
+- migrations/ (InitialSchema, AddTasks), data-source.ts for the TypeORM CLI
+
+apps/web/src: main.tsx, router.tsx, api/ (fetch client, types, one file per resource, mocks), lib/ (socket, query client), features/ (auth, projects, board, chat), layouts/AppLayout.tsx, components/ui (generated shadcn).
+
+docs/: README.md (index), backend-next-steps.md (plan), issues/drag-into-empty-column.md.
+
+# Yoke: how to run it locally
+
+1. npm install at the root (installs both workspaces).
+2. Create .env in the root with DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_NAME, PGADMIN_EMAIL, PGADMIN_PASSWORD, REDIS_HOST, REDIS_PORT, JWT_SECRET and JWT_EXPIRES_IN. Optional PORT for the API.
+3. docker compose up -d starts Postgres (port DB_PORT), pgAdmin (port 5050) and Redis (port 6379).
+4. npm run dev starts the API on http://localhost:3000 and the web app on http://localhost:5173. npm run dev:api or npm run dev:web start only one.
+
+The API scripts load the root .env with nest start --env-file ../../.env. Migrations run with npm run migration:run -w api. The root README's .env example does not yet list JWT_SECRET and JWT_EXPIRES_IN, but the auth module needs JWT_SECRET (it uses config.getOrThrow).
+
+# Yoke: environment variables
+
+- DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_NAME: Postgres connection, used by Docker Compose and TypeORM.
+- PGADMIN_EMAIL, PGADMIN_PASSWORD: pgAdmin login.
+- REDIS_HOST, REDIS_PORT: Redis connection. Docker Compose always publishes Redis on 6379.
+- JWT_SECRET: required; the app fails to start without it (getOrThrow).
+- JWT_EXPIRES_IN: token lifetime in seconds, default 3600 (1 hour).
+- PORT: optional API port, default 3000. If changed, API_TARGET in apps/web/vite.config.ts must change too.
+- Web flags in apps/web/.env.development: VITE_MOCK_AUTH and VITE_MOCK_TASKS, both currently false (real API).
+
+# Yoke: HTTP API endpoints
+
+Public:
+- GET / returns "Hello World!".
+- GET /db-test counts Health rows to confirm the database connection.
+- POST /auth/register { email, password, name? } returns the user (201).
+- POST /auth/login { email, password } returns { accessToken, user } with status 200 (forced with @HttpCode, since POST defaults to 201).
+
+Protected by AuthGuard (Authorization: Bearer <token>):
+- GET /auth/me returns the JWT payload { sub, email }.
+- POST /projects, GET /projects, GET /projects/:id, PATCH /projects/:id, DELETE /projects/:id (204 No Content).
+- GET /projects/:projectId/tasks and POST /projects/:projectId/tasks.
+- PATCH /tasks/:id and DELETE /tasks/:id (returns the deleted task with 200).
+
+Ids are parsed with ParseIntPipe, so a non-numeric id returns 400.
+
+# Yoke: NestJS module structure
+
+AppModule imports ConfigModule (global), TypeOrmModule.forRoot (postgres, autoLoadEntities: true, synchronize: false), ProjectsModule, ChatModule, RedisModule, EventEmitterModule.forRoot(), UsersModule, AuthModule and TasksModule.
+
+Dependencies between modules:
+- AuthModule imports UsersModule and registers JwtModule with registerAsync and a ConfigService factory. It exports AuthGuard and JwtModule, because any module that uses AuthGuard also needs JwtService injected.
+- ProjectsModule imports AuthModule (for the guard) and exports ProjectsService.
+- TasksModule imports ProjectsModule to check that a project exists, and AuthModule.
+- ChatModule imports ProjectsModule for the same check.
+- RedisModule is decorated @Global, so the REDIS token can be injected anywhere without importing it.
+
+# Yoke: input validation with DTOs
+
+main.ts registers a global ValidationPipe with whitelist: true (properties without decorators are stripped) and transform: true (payloads become DTO class instances, and string dates are converted where @Type is used).
+
+CreateProjectDto: name (string, 3 to 100 chars), description (optional, max 200), startDate (@Type(() => Date) + @IsDate), endDate optional, status optional and one of active, inactive, completed, owner (string), team (array of strings). UpdateProjectDto = PartialType(CreateProjectDto) from @nestjs/mapped-types, so every field becomes optional and keeps its validators.
+
+CreateTaskDto: title (required, max 200), description (optional, max 2000, nullable), status optional in todo, in_progress, done, assignee optional and nullable. @IsOptional also accepts null, which the web app sends to clear a field. UpdateTaskDto = PartialType(CreateTaskDto) plus an optional numeric position.
+
+RegisterDto: name optional (3 to 60), email (@IsEmail), password (min 8). LoginDto has no length rule on the password on purpose: the rules belong to registration.
+
+# Yoke: database schema and migrations
+
+Tables (from the migrations InitialSchema and AddTasks):
+- health: id serial, status varchar. Only used by /db-test.
+- users: id serial, name varchar(60) nullable, email varchar unique, passwordHash varchar, createdAt timestamptz default now().
+- project: id serial, name, description (nullable), createdAt, updatedAt, startDate timestamptz, endDate nullable, status default 'active', owner varchar, team text.
+- task: id serial, projectId integer (indexed, FK to project with ON DELETE CASCADE), title, description text nullable, status default 'todo', position double precision, assignee nullable, createdAt, updatedAt.
+
+Project.team uses TypeORM's simple-array type, which stores the array as one comma-separated text value. A team member name that contains a comma would be split in two when read back.
+
+synchronize is false; schema changes go through generated migrations (migration:generate, migration:run, migration:revert). data-source.ts loads the root .env with process.loadEnvFile so the CLI works outside Nest.
+
+# Yoke: authentication flow
+
+Register: AuthService.register checks UsersService.findByEmail and throws ConflictException (409) if the email exists, hashes the password with bcrypt (10 salt rounds), and saves the user. UsersService.create picks id, name, email and createdAt by hand, because repository.save returns the object passed in, hash included.
+
+Login: findByEmailWithPassword loads the user including passwordHash. The User entity marks passwordHash with select: false, so normal queries never load it; the login query asks for it explicitly. If the user is missing or bcrypt.compare fails, it throws UnauthorizedException('Invalid credentials'). The same message for both cases prevents email enumeration. On success it signs { sub: user.id, email } and returns { accessToken, user }.
+
+AuthGuard implements CanActivate: it reads "Authorization: Bearer <token>", throws 401 "Missing access token" if absent, and calls jwt.verifyAsync. On success it puts the payload on request.user (typed through AuthenticatedRequest). A bad signature or an expired token gives 401 "Invalid or expired access token". SafeUser is defined as Omit<User, 'passwordHash'>.
+
+# Yoke: Redis caching of projects
+
+ProjectsService uses the cache-aside pattern with ioredis:
+- findAll reads the key projects:all. On a miss it queries Postgres ordered by createdAt DESC and stores the JSON with SET ... EX 60 (60 second TTL).
+- findOne(id) reads projects:{id}. On a miss it loads from Postgres, throws NotFoundException if missing, and caches it for 60 s.
+- create saves, then deletes projects:all.
+- update loads the row, saves { ...project, ...dto }, writes the fresh project to projects:{id}, and deletes projects:all.
+- remove deletes by id (404 if affected === 0), then deletes both keys.
+
+Invalidation happens on write, and the TTL is a safety net. Values come back from JSON.parse, so cached dates are strings, not Date objects; the entity types createdAt and updatedAt as Date | string for that reason. Tasks are not cached.
+
+# Yoke: tasks module and card ordering
+
+Task routes: list and create sit under /projects/:projectId/tasks, while update and delete use /tasks/:id. TasksController has no route prefix, so it can define both shapes.
+
+TasksService.findAllForProject first calls ProjectsService.findOne (404 for a missing project), then returns tasks ordered by position ASC, id ASC. create puts a new task at the end of its column: it reads repo.maximum('position', { projectId, status }) and adds POSITION_STEP = 1000. update merges the DTO into the loaded task and saves. remove loads the task first so the deleted task can be returned and its projectId used for the event.
+
+Ordering uses fractional positions in a double precision column. When a card is dropped, the web app computes a position between its new neighbours (their midpoint, or neighbour +/- 1000 at a column edge) and sends only that one task's status and position. One row changes per move, instead of renumbering the column. A float column is required: an integer would lose values like 1250.5, and Postgres decimal would come back as a string and break sorting. The trade-off: after many inserts at the same spot the gap halves each time and float precision runs out (about 50 splits), so a real system would eventually rebalance positions. Yoke does not do that yet.
+
+# Yoke: real-time chat with Socket.IO
+
+ChatGateway is a @WebSocketGateway() on the same port as HTTP. Each project has a room named project-{id}.
+
+Client to server:
+- joinProject { projectId }: checks the project exists through ProjectsService.findOne. It replies with the event joinedProject { projectId }, or error { message } if the project is missing. A gateway handler can reply by returning { event, data }.
+- sendMessage { projectId, text }: broadcasts newMessage { projectId, text, senderId, sentAt } to the room with server.to(room).emit.
+
+handleConnection and handleDisconnect only log. senderId is the socket id, because chat does not use the user yet, so the web app shows other senders as "User abcd" (the first 4 characters of the socket id). Messages are not stored anywhere, so the chat is empty after a reload.
+
+# Yoke: live task updates (EventEmitter2 + gateway pattern)
+
+Task changes reach other browsers in two steps:
+1. TasksService emits in-process events with EventEmitter2 after each write: task.created (the task), task.updated (the task), task.deleted ({ id, projectId }).
+2. TasksGateway has @OnEvent handlers that forward them to the room project-{projectId} as taskCreated, taskUpdated and taskDeleted.
+
+This keeps the service free of any Socket.IO code: the service announces a domain event and the gateway decides how to deliver it. Both gateways have no namespace, so they share one Socket.IO server and the same rooms. The room name is built in two places (ChatGateway.roomName and TasksGateway.roomName), which the plan said to keep in one place.
+
+ProjectsService also emits project.created, project.updated and project.removed, but nothing listens to them yet. The planned FeedGateway would broadcast them as projectCreated, projectUpdated and projectRemoved, and the web app already listens for those.
+
+# Yoke web: how the browser talks to the API
+
+The browser only talks to the Vite dev server. vite.config.ts proxies /api/* to http://localhost:3000 and strips the /api prefix (both apps have a /projects path), and proxies /socket.io with ws: true for WebSocket upgrades. Because everything is same-origin in development, the API needs no CORS configuration.
+
+src/api/client.ts has one api<T>(path, { method, body }) function around fetch. It adds Content-Type for JSON bodies and Authorization: Bearer from the session. On a 401 it clears the session, which sends the user to /login. On any non-OK status it throws ApiError(status, message), where the message comes from Nest's { statusCode, message, error } body (joining an array of validation messages). A 204 returns undefined.
+
+# Yoke web: session and auth state
+
+src/api/session.ts is a tiny external store: the session { accessToken, user } is kept in a module variable and in localStorage under project-hub.session, with a Set of listeners. React reads it through useSyncExternalStore in useAuth(), so components re-render on login and logout. A window "storage" event listener syncs logins and logouts across tabs.
+
+register() creates the account and then logs in with the same credentials. logout() clears the session and calls queryClient.clear(), because cached data belongs to the user who left.
+
+RequireAuth is a layout route: it renders <Outlet /> for a signed-in user, otherwise <Navigate to="/login" replace state={{ from }} /> so login can send the user back. The router nests RequireAuth > AppLayout > /projects and /projects/:projectId; any other path redirects to /projects.
+
+Trade-off worth naming: the JWT lives in localStorage, which any script injected by XSS could read. An httpOnly cookie avoids that but needs CSRF protection. There is no refresh token; after JWT_EXPIRES_IN (1 hour by default) the next request gets a 401 and the user is signed out.
+
+# Yoke web: data fetching with TanStack Query
+
+Each feature keeps all data code in a queries.ts file; the other files are UI.
+
+Projects: key ['projects'] for the list and ['projects', id] for one project, so invalidating ['projects'] reloads both. useProject sets retry: false, because a missing project will not appear on retry.
+
+Tasks: key ['tasks', projectId]. The single rule is that any task change reloads that project's task list from the API (invalidateQueries in onSettled). The one shortcut is an optimistic update in useUpdateTask: onMutate cancels in-flight queries (so a late reload cannot overwrite the change), then patches the cached list with setQueryData, so a dropped card stays where it was dropped. onSettled invalidates; after an error that reload puts the card back, and the board shows an alert.
+
+AppLayout calls queryClient.invalidateQueries() on every socket "connect", so anything missed while offline is refetched after a reconnect.
+
+# Yoke web: one shared socket
+
+src/lib/socket.ts creates one typed socket: Socket<ServerToClientEvents, ClientToServerEvents>, with autoConnect: false and auth: (cb) => cb({ token }) so each connect sends the current token in the handshake (the API does not check it yet). AppLayout connects on mount and disconnects on unmount, so the socket is open only while a signed-in page is shown.
+
+useSocketConnected() uses useSyncExternalStore over connect/disconnect events, which drives the Live/Offline dot in the top bar.
+
+useProjectRoom(projectId) emits joinProject when connected and again on every "connect", because the server forgets a dropped socket's rooms. On cleanup it emits leaveProject, which the API ignores for now, so listeners also filter events by projectId.
+
+The tasks API hides the transport behind subscribe(onChange): the real implementation listens to taskCreated, taskUpdated and taskDeleted and passes on only the projectId; the mock uses a BroadcastChannel between tabs. useLiveTasks invalidates the task query when the changed projectId matches.
+
+# Yoke web: mocks behind interfaces
+
+src/api/auth.ts and src/api/tasks.ts each define an interface (AuthApi, TasksApi) and export either the real implementation or a mock from src/api/mocks.ts, chosen by VITE_MOCK_AUTH and VITE_MOCK_TASKS. Nothing else in the app knows which one it has.
+
+The mocks store tasks in localStorage (key project-hub.mock.tasks), fake 150 ms of latency so loading states show, accept any login, and use a BroadcastChannel to notify other tabs, standing in for the socket. They let the front end be built before the back-end modules existed. Both flags are now false, and the mocks file says to delete it once both are off.
+
+# Yoke web: the Kanban board
+
+Board.tsx uses dnd-kit's DndContext with a PointerSensor that needs 5 px of movement before a drag starts, so a plain click still opens the task dialog. Collision detection is custom: pointerWithin first (what is under the pointer wins, cards over columns), then closestCorners as a fallback between columns. A DragOverlay renders the floating card with dropAnimation={null}, so it does not glide back to the start while the real card is already in its new place.
+
+Card ids are task ids (numbers) and column ids are statuses (strings), so handleDragEnd can tell a drop on a card from a drop on a column. position.ts has pure functions: tasksInColumn (filter and sort by position, then id), positionBetween(before, after), and resolveDrop, which returns { status, position } or null when the card did not really move (same neighbours as before).
+
+BoardPage parses projectId from the URL and renders ProjectBoard with key={projectId}, so chat state and open dialogs never carry over between projects. DialogState is a discriminated union: { mode: 'create', status } | { mode: 'edit', taskId } | null. The edit dialog reads the task from the live list, so it closes itself if another tab deletes the task. To add a column, add the status to TaskStatus and an entry to BOARD_COLUMNS.
+
+# Yoke web: chat widget
+
+ChatWidget is a floating button in the bottom-right corner that opens a panel. It stays mounted while closed, so it keeps receiving messages and can show an unread count (messages.length - seenCount).
+
+useProjectChat listens to newMessage, error and joinedProject on the shared socket, ignores messages for other projects, and marks a message as "mine" when senderId equals socket.id at arrival time (the socket id changes after a reconnect). There is no local echo: the server sends each message back to the whole room, sender included. The input is disabled while disconnected, because a message sent before the room rejoin would never come back to the sender.
+
+# Yoke: testing status
+
+On 25 October 2026, npm run test -w api reports 4 of 5 test suites failing (1 of 2 tests passing). Only users.service.spec.ts passes. The reasons, as recorded in docs/backend-next-steps.md:
+- app.controller.spec.ts: the testing module does not provide the Health repository (fix: provide a fake repository with getRepositoryToken(Health)).
+- chat.gateway.spec.ts: chat.gateway.ts imports 'src/projects/projects.service', an absolute path Jest cannot resolve (fix: relative import or moduleNameMapper).
+- projects.controller.spec.ts and projects.service.spec.ts: SyntaxError "Unexpected token 'export'" from @nestjs/event-emitter, which ships ES modules that Jest does not transform from node_modules (fix: mock the package or set transformIgnorePatterns).
+
+The e2e tests cannot see the root .env, because only the start scripts pass --env-file. Suggested fix: envFilePath: ['.env', '../../.env'] in ConfigModule.forRoot. The web app has no automated tests in the repository. A Playwright drag-and-drop test was run from a temporary folder and is not committed.
+
+# Yoke: backend roadmap and what is done
+
+The plan in docs/backend-next-steps.md has seven steps. Status as of 25 October 2026, checked against the code:
+1. Validate input: done (global ValidationPipe, decorated DTOs).
+2. Tasks module: done (entity, DTOs, service, controller, migration with ON DELETE CASCADE).
+3. Task events over the socket: done (EventEmitter2 + TasksGateway).
+4. Project feed and leaveProject: not done. Project events are emitted but nothing listens, and leaveProject is ignored.
+5. Auth: mostly done (register, login, guard on HTTP routes, /auth/me, register page in the web app). Not done: checking the token when a socket connects.
+6. Chat history: not done (no Message entity, no GET /projects/:id/messages).
+7. Scaling: not done (no Socket.IO Redis adapter, no Cache-Control headers).
+
+The plan document's "Today" sections and the root README still describe the earlier state (no ValidationPipe, login and tasks on mocks). The web README is up to date.
+
+# Yoke: known gaps and weaknesses (good "what would you improve" answers)
+
+- Sockets are not authenticated. handleConnection does not verify client.handshake.auth.token, so anyone who can reach the server can join any project room, read chat and task events, and send messages.
+- sendMessage does not check that the socket has joined the room it sends to, so a client can post into any project.
+- Socket payloads are inline types, not DTO classes, so they are not validated.
+- No authorization, only authentication: every signed-in user can see, edit and delete every project and task. Project.owner and team are free-text strings, not relations to the users table.
+- Chat senders are socket ids, not users, and messages are not persisted.
+- With more than one API instance, Socket.IO rooms would only reach clients on the same instance; this needs the Redis adapter (and sticky sessions for the polling transport).
+- Fractional positions are never rebalanced.
+- simple-array breaks names containing commas.
+- In ProjectsService.findOne the cache is read before the Number.isInteger check, a small ordering oddity.
+- No refresh tokens; the JWT is in localStorage.
+- Most API unit tests fail, and there are no web tests.
+
+# Yoke: known bug "drag into empty column sometimes does nothing"
+
+Documented in docs/issues/drag-into-empty-column.md, status open, cause unknown. Found on 3 October 2026 by an automated Playwright test (headless Edge, two tabs on the same board, mock tasks). Dropping a card in the centre of an empty Done column sometimes left the card in To do, with no console error. It failed in 3 of 6 two-tab runs. A single-tab test did the same kind of drag 14 times without a failure. Nobody has seen it by hand yet.
+
+Unverified guess: the dragging tab was in the background, browsers throttle timers in background tabs, and dnd-kit had not finished measuring drop targets at mouseup. If so, the bug is in the test, not the app. Next steps: try 20 drags by hand; log active.id, over?.id and over?.data.current in handleDragEnd; call page.bringToFront() before each drag in the test.
+
+# Yoke: design decisions worth explaining in an interview
+
+- Event-driven gateways: services emit domain events and gateways forward them, so business logic does not depend on the transport, and a new listener (an audit log, notifications) needs no change to the service.
+- Invalidate-and-refetch on the client: socket events carry the whole task, but the client uses only projectId and refetches the list. That is one code path for own and others' changes, never a half-applied event, at the cost of one extra GET per change.
+- Optimistic update only where latency is visible (drag and drop); everything else waits for the server.
+- Fractional indexing for ordering: one row per move.
+- Cache-aside with write-time invalidation and a short TTL as a safety net.
+- Interfaces + mocks + env flags let the front end be built ahead of the API without changing feature code.
+- Vite proxy avoids CORS in development and keeps the API free of a global prefix.
+- select: false on passwordHash plus explicit field picking, so the hash cannot leak through a forgotten serializer.
+- Same error message for unknown email and wrong password.
+- Migrations instead of synchronize: true.
+- Typed Socket.IO events on the client (ServerToClientEvents / ClientToServerEvents generics).

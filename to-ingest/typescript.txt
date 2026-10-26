@@ -1,0 +1,298 @@
+TypeScript reference and interview questions
+Written 25 October 2026. Covers TypeScript up to 5.9, with notes on 6.0 and 7.0. Examples from the Yoke project are marked "In Yoke".
+Each topic is its own section, so it can be retrieved on its own.
+
+# TypeScript: What is TypeScript and what does it do at runtime?
+
+TypeScript is JavaScript plus a static type system, made by Microsoft. The compiler (tsc) checks types and then emits plain JavaScript with the types removed. Types do not exist at runtime: you cannot check "is this a User interface" while the program runs, and a wrong type assertion is never caught. That is why data from outside (HTTP bodies, JSON files, environment variables, localStorage) must be validated at runtime with something like zod, valibot or class-validator. TypeScript's type system is structural, gradual (any opts out), and deliberately not fully sound: some unsafe patterns are allowed for convenience.
+
+# TypeScript: type vs interface
+
+Both describe object shapes, and for most objects either works.
+- interface can be extended with extends and is open: declaring the same interface twice merges the declarations (declaration merging). Used for library typings meant to be augmented. Error messages and performance are slightly better for large object hierarchies.
+- type is an alias for any type: unions ('a' | 'b'), tuples, primitives, function types, mapped and conditional types. It cannot be re-opened. Intersections (&) combine types.
+A common rule: interface for object shapes and public APIs, type for unions, utility compositions and everything else. Consistency in a codebase matters more than the choice.
+
+In Yoke: interface Task { ... } and interface AuthApi { ... } for shapes; type TaskStatus = 'todo' | 'in_progress' | 'done' for a union.
+
+# TypeScript: any vs unknown vs never
+
+- any turns off type checking. Anything can be assigned to it and it can be used as anything. It spreads silently through code. Avoid it; enable noImplicitAny (part of strict).
+- unknown is the type-safe top type: anything can be assigned to it, but you cannot use it until you narrow it (typeof, instanceof, a type guard, or schema validation). Use it for JSON.parse results, catch clause errors and untrusted input.
+- never is the bottom type: no value has it. It is the return type of functions that always throw or loop forever, the result of impossible narrowing, and what remains after you remove every member of a union. Used for exhaustiveness checks.
+- void is the return type of functions whose return value should be ignored.
+With useUnknownInCatchVariables (in strict), catch (e) gives e: unknown, so you write if (e instanceof Error) e.message.
+
+# TypeScript: Union and intersection types
+
+A union A | B is a value that is either A or B. You can only use members common to both until you narrow. An intersection A & B is a value that is both A and B at once (it has all properties of both). Intersecting incompatible primitives gives never ('a' & 'b' is never).
+Example: type Id = number | string. type Timestamped<T> = T & { createdAt: string }.
+In Yoke: type DisplayedMessage = ChatMessage & { mine: boolean } adds a client-only flag to the server type.
+
+# TypeScript: Narrowing
+
+TypeScript follows control flow to refine a union into a narrower type:
+- typeof x === 'string' for primitives.
+- x instanceof Date for classes.
+- 'swim' in animal to check a property.
+- Equality: x === null, x !== undefined, comparison with a literal.
+- Truthiness: if (x) removes null, undefined, 0, '' and false.
+- Discriminated unions: checking a shared literal property (kind, type, status).
+- Type predicates: function isFish(a: Animal): a is Fish { ... }.
+- Assertion functions: function assert(cond: unknown): asserts cond { ... } and function assertIsString(v: unknown): asserts v is string.
+Since TypeScript 5.5, simple filter callbacks infer predicates automatically: [1, null, 2].filter(x => x !== null) has type number[].
+
+# TypeScript: Discriminated unions and exhaustiveness checks
+
+A discriminated (tagged) union is a union of object types that share a literal property:
+
+type Shape =
+  | { kind: 'circle'; radius: number }
+  | { kind: 'square'; size: number };
+
+function area(s: Shape): number {
+  switch (s.kind) {
+    case 'circle': return Math.PI * s.radius ** 2;
+    case 'square': return s.size ** 2;
+    default: {
+      const unreachable: never = s;
+      throw new Error(`Unknown shape: ${JSON.stringify(unreachable)}`);
+    }
+  }
+}
+
+If someone adds a 'triangle' member, the assignment to never fails to compile, so every switch that needs updating is found. They model states well: loading/success/error, or API results { ok: true, data } | { ok: false, error }. They make impossible states unrepresentable, unlike one object with many optional fields.
+
+In Yoke: the board's dialog state is type DialogState = { mode: 'create'; status: TaskStatus } | { mode: 'edit'; taskId: number } | null.
+
+# TypeScript: Structural typing and excess property checks
+
+TypeScript compares types by shape, not by name (structural, "duck" typing). Two interfaces with the same properties are interchangeable, and an object with extra properties can be passed where fewer are needed. A class instance is assignable to an interface it never mentions.
+Exception: excess property checks. An object literal written directly where a type is expected must not have unknown properties: const p: Point = { x: 1, y: 2, z: 3 } is an error. The same object stored in a variable first passes. This catches typos in literals. When nominal typing is needed (UserId vs OrderId, both numbers), use branded types.
+
+# TypeScript: Generics
+
+Generics are type parameters, so one function or type works with many types and keeps the link between input and output:
+
+function first<T>(items: T[]): T | undefined { return items[0]; }
+
+Constraints limit what T can be: function longest<T extends { length: number }>(a: T, b: T): T. Type parameters can have defaults: interface Box<T = string>. TypeScript usually infers them from the arguments.
+Rules of thumb: a type parameter should appear at least twice (otherwise use the constraint type directly); prefer fewer type parameters; constrain with extends instead of casting inside.
+
+In Yoke: api<T>(path) returns Promise<T>, so api<Task[]>('/projects/1/tasks') is typed by the caller. The socket is typed as Socket<ServerToClientEvents, ClientToServerEvents>, so emit and on check event names and payloads.
+
+# TypeScript: keyof, typeof and indexed access types
+
+- keyof T is the union of T's property names: keyof { a: 1; b: 2 } is 'a' | 'b'.
+- typeof x (in a type position) takes the type of a value: const config = { port: 3000 }; type Config = typeof config.
+- T[K] is an indexed access type: Task['status'] is TaskStatus. T[number] gives the element type of an array or tuple.
+Combined: function get<T, K extends keyof T>(obj: T, key: K): T[K] returns the right type for each key.
+Getting a union from a constant array: const STATUSES = ['todo', 'in_progress', 'done'] as const; type Status = (typeof STATUSES)[number] gives 'todo' | 'in_progress' | 'done', with one source of truth for both the runtime list and the type.
+
+# TypeScript: Built-in utility types
+
+- Partial<T>: all properties optional. Required<T>: all required. Readonly<T>: all readonly.
+- Pick<T, K>: only keys K. Omit<T, K>: all but keys K.
+- Record<K, V>: an object type with keys K and values V, for example Record<TaskStatus, Task[]>.
+- Exclude<U, X>: remove members from a union. Extract<U, X>: keep only matching members. NonNullable<T>: remove null and undefined.
+- ReturnType<F>, Parameters<F>, ConstructorParameters<C>, InstanceType<C>.
+- Awaited<T>: unwrap a Promise (recursively). ReturnType<typeof fetchUser> is a Promise; Awaited<ReturnType<typeof fetchUser>> is the user.
+- NoInfer<T> (TypeScript 5.4): stops a position from being used to infer T.
+- Uppercase, Lowercase, Capitalize, Uncapitalize for string literal types.
+
+In Yoke: type SafeUser = Omit<User, 'passwordHash'> in the API; type UpdateTaskInput = Partial<Pick<Task, 'title' | 'description' | 'status' | 'position' | 'assignee'>> in the web app; NestJS's PartialType(CreateProjectDto) is the runtime-class equivalent of Partial.
+
+# TypeScript: Mapped types
+
+A mapped type builds an object type by looping over keys:
+
+type Optional<T> = { [K in keyof T]?: T[K] };       // like Partial
+type Mutable<T> = { -readonly [K in keyof T]: T[K] }; // removes readonly
+type Getters<T> = { [K in keyof T as `get${Capitalize<string & K>}`]: () => T[K] };
+
+Modifiers: ? and readonly can be added with + (default) or removed with -. The as clause (key remapping, TypeScript 4.1) renames keys or filters them out by mapping to never:
+type OnlyStrings<T> = { [K in keyof T as T[K] extends string ? K : never]: T[K] };
+
+# TypeScript: Conditional types and infer
+
+A conditional type picks a type based on a test: T extends U ? X : Y.
+infer captures part of a matched type:
+type ElementType<T> = T extends (infer E)[] ? E : never;
+type MyReturnType<F> = F extends (...args: any[]) => infer R ? R : never;
+type UnwrapPromise<T> = T extends Promise<infer V> ? UnwrapPromise<V> : T;
+
+Distributive behaviour: when the checked type is a naked type parameter and it receives a union, the condition is applied to each member separately and the results are joined. ToArray<string | number> with T extends any ? T[] : never gives string[] | number[]. Wrap it in brackets to stop distribution: [T] extends [any] ? T[] : never gives (string | number)[]. Exclude<T, U> is defined as T extends U ? never : T, which relies on distribution.
+
+# TypeScript: Template literal types
+
+String literal types can be built with template syntax:
+type Lang = 'en' | 'de';
+type Key = `title_${Lang}`;  // 'title_en' | 'title_de'
+Unions multiply out (all combinations). Combined with infer they can parse strings:
+type RouteParams<S> = S extends `${string}:${infer P}/${infer Rest}` ? P | RouteParams<`/${Rest}`> : S extends `${string}:${infer P}` ? P : never;
+RouteParams<'/projects/:projectId/tasks/:id'> is 'projectId' | 'id'. Libraries use this for typed routes, event names (`on${Capitalize<E>}`) and CSS values.
+
+# TypeScript: as const, satisfies and type assertions
+
+- as const makes a literal deeply readonly and keeps the narrowest literal types: ['a', 'b'] as const is readonly ['a', 'b'] instead of string[]. In Yoke the query key ['tasks', projectId] as const keeps a readonly tuple type.
+- satisfies (TypeScript 4.9) checks that a value matches a type without widening it to that type. const routes = { home: '/', board: '/projects/:id' } satisfies Record<string, string>. You get the error checking, and routes.home keeps its literal type and known keys.
+- as (a type assertion) tells the compiler to trust you. It is not a conversion, and nothing checks it at runtime. TypeScript only allows it when the types overlap; as unknown as X forces anything, which is a red flag in code review.
+- The non-null assertion x! removes null and undefined without a check. In Yoke: document.getElementById('root')! in main.tsx.
+Prefer satisfies and narrowing over as.
+
+# TypeScript: Enums vs union of string literals
+
+Enums create a runtime object as well as a type. Numeric enums are not type-safe in older versions (any number was assignable) and have reverse mappings; string enums are nominal (you must write Status.Active, not 'active'). const enum is inlined but breaks with isolatedModules and single-file transpilers.
+A union of string literals ('active' | 'inactive') has no runtime cost, works with plain JSON from an API, and narrows naturally. For a runtime list, pair it with an as const array or object:
+const Status = { Active: 'active', Inactive: 'inactive' } as const;
+type Status = (typeof Status)[keyof typeof Status];
+Enums are also not "erasable syntax", so they do not work with Node's built-in type stripping or the erasableSyntaxOnly flag. Most modern codebases prefer unions.
+
+# TypeScript: Function types and overloads
+
+Function type syntax: type Handler = (event: Event) => void. Call signatures in an object type: { (x: number): string; description: string }. Optional parameters (x?: number), defaults (x = 1), rest parameters (...args: number[]).
+Overloads give one function several signatures:
+function parse(input: string): Data;
+function parse(input: Buffer): Data;
+function parse(input: string | Buffer): Data { ... }
+Only the overload signatures are visible to callers, not the implementation signature. Often a union parameter or a generic is simpler than overloads.
+A function returning void can be assigned a function returning a value (so [1, 2].forEach(n => arr.push(n)) is fine).
+Use the this parameter to type this: function onClick(this: HTMLButtonElement, e: MouseEvent).
+
+# TypeScript: Classes: modifiers, abstract and parameter properties
+
+- public (default), protected (class and subclasses), private (class only, checked at compile time only). JavaScript's #field is truly private at runtime.
+- readonly properties can only be set in the declaration or the constructor.
+- Parameter properties: constructor(private readonly repo: Repository<Task>) {} declares and assigns the field in one go. NestJS dependency injection relies on this. They are not erasable syntax (no type stripping).
+- abstract classes cannot be instantiated and can declare abstract methods for subclasses to implement.
+- implements checks that a class matches an interface (a class can implement several), but adds nothing at runtime.
+- override marks methods that override a parent method; noImplicitOverride makes it required.
+- strictPropertyInitialization requires fields to be assigned in the constructor; field! (definite assignment) tells the compiler a framework will set it. In Yoke: @WebSocketServer() server!: Server.
+
+# TypeScript: Decorators
+
+Decorators are functions applied with @ to classes, methods, accessors, fields and parameters. There are two implementations:
+- Legacy "experimental" decorators (experimentalDecorators: true), used by NestJS, TypeORM, Angular and class-validator. With emitDecoratorMetadata, the compiler also emits design:type and design:paramtypes metadata, which Nest uses to know which providers to inject. They support parameter decorators (@Body(), @Inject()).
+- Standard ECMAScript decorators (TypeScript 5.0+, without the flag). They have a different API (they receive a context object), do not support parameter decorators and do not emit type metadata.
+In Yoke the API tsconfig has experimentalDecorators and emitDecoratorMetadata set, as NestJS requires.
+
+# TypeScript: Readonly, tuples and arrays
+
+- readonly string[] (or ReadonlyArray<string>) has no push or splice. A mutable array can be passed where a readonly one is expected, not the other way around.
+- Tuples have fixed length and per-position types: [number, string]. Labelled: [id: number, name: string]. Optional elements [x: number, y?: number] and rest elements [string, ...number[]].
+- useState returns a tuple, so you can name the parts when destructuring.
+- noUncheckedIndexedAccess makes arr[i] and record[key] include undefined, which catches out-of-range access. Hearthy's chunker uses window[0]! because of it.
+
+# TypeScript: Branded (nominal) types
+
+Structural typing lets a ProjectId be passed where a UserId is expected if both are numbers. A brand adds a fake property to tell them apart:
+type Brand<T, B extends string> = T & { readonly __brand: B };
+type UserId = Brand<number, 'UserId'>;
+type ProjectId = Brand<number, 'ProjectId'>;
+function toUserId(n: number): UserId { return n as UserId; }
+A plain number cannot be passed where a UserId is expected, and a ProjectId cannot be passed as a UserId. Brands cost nothing at runtime. Validation libraries (zod's .brand()) create them after checking a value, for example a validated Email string.
+
+# TypeScript: Variance in plain words
+
+Covariance: if Dog is assignable to Animal, then a Dog[] or a function returning Dog is assignable where Animal[] or a function returning Animal is expected. Contravariance: parameters work the other way: a function taking Animal can be used where a function taking Dog is expected, not the reverse. With strictFunctionTypes, function type parameters are checked contravariantly, but method syntax (method(x: T): void) stays bivariant for compatibility. Arrays are treated as covariant, which is unsound: you can assign Dog[] to Animal[] and then push a Cat. Since 4.7, you can annotate type parameters with in, out or in out to declare variance explicitly.
+
+# TypeScript: Important tsconfig options
+
+- strict: true turns on noImplicitAny, strictNullChecks, strictFunctionTypes, strictBindCallApply, strictPropertyInitialization, noImplicitThis, alwaysStrict and useUnknownInCatchVariables. Always use it in new code.
+- noUncheckedIndexedAccess: index access may be undefined. exactOptionalPropertyTypes: x?: string no longer accepts an explicit undefined.
+- noImplicitReturns, noFallthroughCasesInSwitch, noImplicitOverride, noUnusedLocals, noUnusedParameters.
+- target: the JavaScript version emitted (ES2022, ES2023...). lib: which built-in APIs exist (DOM, ES2023).
+- module and moduleResolution: nodenext for Node.js (follows package.json "type" and exports, requires file extensions in relative ESM imports), bundler for Vite, webpack and Next.js (extensionless imports allowed, still reads exports).
+- isolatedModules: every file must be transpilable alone (needed by esbuild, SWC and Babel). verbatimModuleSyntax: imports without type are kept, import type is removed, so you must mark type-only imports.
+- paths: import aliases such as @/* (the bundler or runtime must resolve them too). skipLibCheck: skip checking .d.ts files, faster builds.
+- declaration, sourceMap, outDir, rootDir, incremental, composite and references for project references in monorepos.
+In Yoke the API uses module nodenext but has strict mostly off (only strictNullChecks; noImplicitAny is false). Hearthy uses strict mode.
+
+# TypeScript: import type and module syntax
+
+import type { User } from './types' imports only a type; it is removed entirely from the output. A mixed form: import { api, type ApiError } from './client'. This matters with isolatedModules and verbatimModuleSyntax, because a single-file compiler cannot know whether an imported name is a type or a value. Also export type { X }. In Node ESM with nodenext, relative imports need the .js extension even in .ts files (import { x } from './util.js'); TypeScript 5.7's rewriteRelativeImportExtensions allows writing .ts and rewrites it on emit. Type-only imports also avoid circular import problems at runtime.
+
+# TypeScript: Declaration files and module augmentation
+
+.d.ts files contain only types. They describe JavaScript libraries (from the library itself or from DefinitelyTyped as @types/name) and globals. declare tells the compiler something exists without defining it: declare const __APP_VERSION__: string.
+Module augmentation adds to an existing module's types:
+declare module 'express-serve-static-core' { interface Request { user?: JwtPayload } }
+Global augmentation: declare global { interface Window { analytics: Analytics } } in a module file.
+Vite projects type import.meta.env through an ImportMetaEnv interface (in vite-env.d.ts); Yoke's web app reads import.meta.env.VITE_MOCK_TASKS this way.
+In Yoke, instead of augmenting Express, the API defines interface AuthenticatedRequest extends Request { user: JwtPayload } and uses it only after AuthGuard.
+
+# TypeScript: void vs undefined, object vs Object vs {}
+
+- undefined is a value and a type. void means "the return value should not be used"; a function typed () => void may still return something.
+- object means any non-primitive (objects, arrays, functions). {} means any value except null and undefined (so a string is a {}). Object (capital O) is similar to {} and should not be used. For "any object with string keys", use Record<string, unknown>.
+- Function as a type should be avoided; write the signature, for example (...args: unknown[]) => unknown.
+- null vs undefined: with strictNullChecks they are separate types and must be handled. Optional chaining (a?.b) and nullish coalescing (a ?? b) help; ?? only falls back on null and undefined, while || also falls back on 0, '' and false.
+
+# TypeScript: Type-safe event emitters and API clients
+
+A typed event map ties event names to payloads:
+
+interface Events { taskUpdated: (task: Task) => void; taskDeleted: (p: { id: number; projectId: number }) => void }
+class TypedEmitter<E extends Record<string, (...args: any[]) => void>> {
+  on<K extends keyof E>(event: K, fn: E[K]) { ... }
+  emit<K extends keyof E>(event: K, ...args: Parameters<E[K]>) { ... }
+}
+
+Calling emit('taskUpdated', 42) fails to compile. socket.io-client accepts the same kind of maps as generics, which Yoke uses in src/lib/socket.ts. The same idea types REST clients: a map from route strings to request and response types, or a contract shared between front end and back end (tRPC, ts-rest, OpenAPI-generated types, or a shared types package in a monorepo). Yoke duplicates the shapes by hand in apps/web/src/api/types.ts, which can drift from the API entities.
+
+# TypeScript: Runtime validation and type inference from schemas
+
+Types disappear at runtime, so external data needs runtime checks. Schema libraries define a validator once and infer the static type from it:
+
+import { z } from 'zod';
+const TaskSchema = z.object({ id: z.number(), title: z.string(), status: z.enum(['todo', 'in_progress', 'done']) });
+type Task = z.infer<typeof TaskSchema>;
+const task = TaskSchema.parse(await res.json()); // throws if the shape is wrong
+
+safeParse returns { success, data | error } without throwing. Use it for request bodies, environment variables at startup, API responses, form data, localStorage and messages from sockets. NestJS uses class-validator decorators on DTO classes instead, which needs real classes (an interface cannot be validated). Casting JSON.parse(...) as Task is the most common hidden bug in TypeScript code.
+
+# TypeScript: Common coding exercises
+
+Implement these in a type-level interview:
+- MyPick<T, K extends keyof T> = { [P in K]: T[P] }.
+- MyOmit<T, K extends keyof any> = MyPick<T, Exclude<keyof T, K>>.
+- MyReadonly<T> = { readonly [K in keyof T]: T[K] }.
+- DeepPartial<T> = T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } : T. (Functions and arrays may need special cases.)
+- DeepReadonly<T> in the same way with readonly.
+- TupleToUnion<T extends readonly unknown[]> = T[number].
+- Last<T extends unknown[]> = T extends [...unknown[], infer L] ? L : never.
+- IsNever<T> = [T] extends [never] ? true : false (brackets avoid distribution over never).
+- ValueOf<T> = T[keyof T].
+- A typed groupBy<T, K extends PropertyKey>(items: T[], key: (t: T) => K): Record<K, T[]>.
+- Make some keys optional: PartialBy<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>.
+
+# TypeScript: Features by version (recent)
+
+- 4.9: satisfies operator; in narrowing for unlisted properties.
+- 5.0: standard ECMAScript decorators; const type parameters (function f<const T>(x: T)) to infer literal types; moduleResolution bundler; verbatimModuleSyntax.
+- 5.2: using and await using declarations for explicit resource management (Symbol.dispose), so resources close at the end of a block.
+- 5.4: NoInfer<T>; narrowing preserved in closures after the last assignment; Object.groupBy and Map.groupBy types.
+- 5.5: inferred type predicates (filter(x => x !== undefined) narrows); isolatedDeclarations; regular expression syntax checking.
+- 5.6: errors for conditions that are always truthy or nullish; iterator helper methods.
+- 5.7: errors for variables that are never initialised; rewriteRelativeImportExtensions; target ES2024.
+- 5.8: erasableSyntaxOnly (for Node's type stripping); module node18; better checks of conditional return expressions.
+- 5.9: import defer; module node20; a simpler tsc --init.
+- 6.0: a transition release that deprecates old options (such as ES5 output and older module resolution modes) ahead of 7.0.
+- 7.0: the compiler and language service ported to Go ("Project Corsa", tsgo), with roughly 10 times faster builds and editor responsiveness. The language itself stays the same. Check the current release status.
+
+# TypeScript: Using TypeScript with Node.js, React and NestJS
+
+- Node.js: compile with tsc (or tsup, esbuild, SWC) and run JavaScript, or run .ts directly with tsx, ts-node, or Node's built-in type stripping (erasable syntax only, no type checking, so still run tsc --noEmit in CI). Use @types/node matching your Node version and module nodenext.
+- React: type props with an interface or type (function Card({ task }: { task: Task })), event handlers with React.ChangeEvent<HTMLInputElement>, refs with useRef<HTMLDivElement>(null), state with useState<Task | null>(null). Children: React.ReactNode. Prefer typing props directly over React.FC. Generic components (function List<T>({ items, render }: ...)) are possible.
+- Next.js: page props in Next 15+ are typed with params: Promise<{ id: string }>; Next generates route types; next.config.ts is supported.
+- NestJS: classes for DTOs (validation needs them), interfaces for internal shapes, injection tokens for non-class providers, and typed config through ConfigService<EnvVars, true>.
+
+# TypeScript: Common interview "gotcha" questions
+
+- Why does Object.keys(obj) return string[] and not (keyof T)[]? Because structural typing allows objects with extra keys at runtime, so the compiler cannot promise only the known keys.
+- Why can't I use an interface in an instanceof check? Interfaces do not exist at runtime; use a class, a discriminant or a type guard.
+- Why does my catch variable have type unknown? useUnknownInCatchVariables; anything can be thrown, not only Error.
+- Why does array.find() return T | undefined? It may find nothing; handle the undefined.
+- Why does a union of arrays not let me call .map? (A[] | B[]).map has incompatible signatures in older versions; use (A | B)[] or narrow first. Recent versions handle many of these cases.
+- Why doesn't TypeScript narrow inside a callback? A variable may change before the callback runs; copy it to a const first. 5.4 improved this for variables not reassigned later.
+- Difference between a type error and a runtime error: a program with type errors can still be emitted and run (unless noEmitOnError); a program without type errors can still crash at runtime if any, as or unvalidated data lies to the compiler.

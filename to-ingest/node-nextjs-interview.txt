@@ -1,0 +1,373 @@
+Node.js and Next.js interview questions and answers
+Written 25 October 2026. Next.js answers cover the App Router up to Next.js 16 (released October 2025). Check the current docs for anything newer.
+Each question is its own section, so it can be retrieved on its own.
+
+# Node.js: What is Node.js and why is it good for I/O-heavy servers?
+
+Node.js is a JavaScript runtime built on Google's V8 engine and the libuv library. It runs your JavaScript on a single main thread and does I/O (network, files, timers) without blocking that thread: an operation starts, the thread moves on, and a callback runs when the result is ready. One process can therefore hold thousands of open connections cheaply, which suits APIs, real-time apps (WebSockets), proxies and streaming. It is a poor fit for long CPU-bound work on the main thread (image processing, heavy crypto, big JSON parsing in a loop), because while that runs no other request is served. CPU work goes to worker threads, a separate service, or native code.
+
+# Node.js: Explain the event loop and its phases.
+
+The event loop is libuv's loop that decides which callback runs next. Each turn goes through phases:
+1. timers: callbacks from setTimeout and setInterval whose time has come.
+2. pending callbacks: some deferred system I/O callbacks (for example certain TCP errors).
+3. idle, prepare: internal.
+4. poll: waits for new I/O events and runs their callbacks (most of your code runs here).
+5. check: setImmediate callbacks.
+6. close callbacks: for example socket.on('close').
+
+Between every single callback (since Node 11), Node drains the process.nextTick queue and then the promise microtask queue. The loop exits when nothing is left to wait for (no timers, sockets or pending work).
+
+# Node.js: Microtasks vs macrotasks. What order does this print?
+
+Microtasks are promise reactions (.then, await continuations) and queueMicrotask. process.nextTick has its own queue that runs even before promise microtasks. Macrotasks (tasks) are timers, I/O callbacks and setImmediate.
+
+Example:
+console.log('A');
+setTimeout(() => console.log('B'), 0);
+setImmediate(() => console.log('C'));
+Promise.resolve().then(() => console.log('D'));
+process.nextTick(() => console.log('E'));
+console.log('F');
+
+Output: A, F, E, D, then B and C. Synchronous code runs first, then nextTick, then promises. In the main module, the order of setTimeout(0) and setImmediate is not guaranteed (it depends on how fast the loop starts). Inside an I/O callback, setImmediate always runs before setTimeout(0), because the check phase comes right after poll.
+
+# Node.js: process.nextTick vs setImmediate vs setTimeout(fn, 0)
+
+- process.nextTick(fn): runs right after the current operation, before promises and before the loop continues. A recursive nextTick can starve I/O. Use it to defer a callback or emit an event after the constructor returns.
+- setImmediate(fn): runs in the check phase of the next loop turn, after I/O. Good for yielding to I/O and splitting long work into pieces.
+- setTimeout(fn, 0): runs in the timers phase once at least 1 ms has passed (0 is treated as 1).
+The names are confusing: nextTick is more immediate than setImmediate.
+
+# Node.js: Is Node.js single-threaded? What is the libuv thread pool?
+
+Your JavaScript runs on one main thread, but Node itself uses more threads. libuv has a thread pool, 4 threads by default (set UV_THREADPOOL_SIZE, up to 1024), used for work the OS cannot do asynchronously: most fs operations, dns.lookup, the async crypto functions (pbkdf2, scrypt, randomBytes) and zlib. Network sockets do not use the pool; they use the OS's async mechanisms (epoll on Linux, kqueue on macOS, IOCP on Windows). V8 also has its own threads for garbage collection and compilation. A classic gotcha: many parallel bcrypt or pbkdf2 calls queue behind 4 pool threads, which slows down fs calls too.
+
+# Node.js: How do you handle CPU-intensive work?
+
+Options, from simplest:
+- Split the work into chunks and yield with setImmediate between them.
+- worker_threads: run JavaScript on other threads in the same process. Each worker has its own V8 isolate and event loop. Communicate with postMessage, or share memory with SharedArrayBuffer and Atomics. Use a pool (for example piscina) instead of creating a worker per request.
+- child_process (fork, spawn, exec) for separate programs or full isolation.
+- Move the work to a separate service or job queue (BullMQ on Redis, for example) and respond asynchronously.
+- Native addons or WebAssembly for hot loops.
+
+# Node.js: cluster vs worker_threads vs child_process
+
+- cluster: forks several Node processes that share one server port; the primary distributes connections. Used to use all CPU cores for an HTTP server. Processes do not share memory. Today often replaced by running several containers or a process manager such as PM2.
+- worker_threads: threads inside one process, for CPU-bound JavaScript. Cheaper than processes, can share memory.
+- child_process: run any executable (spawn for streams, exec for buffered output with a shell, execFile without a shell, fork for a Node script with an IPC channel).
+Never pass user input to exec (shell injection); use execFile or spawn with an argument array.
+
+# Node.js: What are streams and what is backpressure?
+
+Streams process data piece by piece instead of loading it all into memory. Types: Readable (fs.createReadStream, an HTTP request), Writable (fs.createWriteStream, an HTTP response), Duplex (a TCP socket) and Transform (zlib.createGzip, which changes data as it passes).
+
+Backpressure: when the consumer is slower than the producer. writable.write() returns false when its internal buffer is above highWaterMark; the producer should stop and wait for the 'drain' event. If you ignore it, memory grows without limit. pipe() and stream.pipeline() handle backpressure for you. Prefer pipeline from 'node:stream/promises': it also forwards errors and destroys all streams on failure, which plain .pipe() does not. Readable streams are also async iterables: for await (const chunk of stream).
+
+# Node.js: What is a Buffer?
+
+A Buffer is a fixed-length sequence of raw bytes, a subclass of Uint8Array. It is used for binary data: files, network packets, images, crypto. Create with Buffer.from('text', 'utf8'), Buffer.alloc(size) (zero-filled) or Buffer.allocUnsafe(size) (faster, may contain old memory, so fill it before use). Convert with buf.toString('utf8' | 'base64' | 'hex'). Watch out when cutting a UTF-8 buffer in the middle of a multi-byte character; use StringDecoder or setEncoding on streams.
+
+# Node.js: CommonJS vs ES modules
+
+CommonJS: require() and module.exports. Loading is synchronous, require can be called anywhere, __dirname and __filename exist, modules are cached after the first require.
+ES modules: import and export. Static structure (enables tree shaking), loaded asynchronously, top-level await allowed, strict mode always, no __dirname (use import.meta.dirname and import.meta.filename since Node 20.11, or fileURLToPath(import.meta.url)).
+
+A .js file is ESM when package.json has "type": "module"; .mjs is always ESM, .cjs always CommonJS. ESM can import CommonJS. Since Node 22.12 (and 20.19), CommonJS can require() an ES module, as long as the module has no top-level await. With TypeScript, "module": "nodenext" follows these same rules.
+
+# Node.js: How does require caching work?
+
+The first require of a file runs it and stores module.exports in require.cache, keyed by the resolved absolute path. Later requires return the same object, which is why a module works as a singleton (for example a shared database pool). The same file reached through two different paths (symlinks, two copies in node_modules) can load twice. Circular requires return a partially filled exports object. ES modules are cached too, by URL.
+
+# Node.js: How should errors be handled?
+
+- Synchronous code: try/catch.
+- Promises: await inside try/catch, or .catch(). Always handle rejections.
+- Callbacks: the error-first convention, (err, result).
+- EventEmitters: an 'error' event with no listener throws and crashes the process, so streams and sockets need error handlers.
+- Express 4 does not catch rejected promises from async handlers (you call next(err) or use a wrapper); Express 5 forwards them to the error middleware automatically.
+- Operational errors (bad input, timeouts, a 404) are expected and handled. Programmer errors (undefined is not a function) are bugs.
+- process.on('uncaughtException') and process.on('unhandledRejection') are for logging and a clean exit, not for carrying on: the process may be in a broken state. Since Node 15 an unhandled rejection crashes the process by default.
+
+# Node.js: What is EventEmitter?
+
+EventEmitter (from 'node:events') is the publish/subscribe base class behind streams, servers and sockets. emitter.on(name, fn) adds a listener, emit(name, ...args) calls the listeners synchronously in the order they were added, once() listens a single time, off() removes one. Listeners that are never removed are a common memory leak; Node warns when more than 10 listeners are added to one event (MaxListenersExceededWarning). events.once(emitter, name) returns a promise, and events.on(emitter, name) gives an async iterator. NestJS's @nestjs/event-emitter wraps EventEmitter2, which adds wildcards and namespaces.
+
+# Node.js: Promise.all vs allSettled vs race vs any
+
+- Promise.all(list): resolves with all results in order; rejects as soon as one rejects (the others keep running but are ignored).
+- Promise.allSettled(list): waits for all and returns { status, value | reason } for each. Use it when partial failure is fine.
+- Promise.race(list): settles like the first promise that settles, success or failure. Used for timeouts.
+- Promise.any(list): resolves with the first success; rejects with an AggregateError only if all fail.
+Sequential await in a loop is slow when the calls are independent; run them together with Promise.all, and limit concurrency (p-limit, or batches) for large lists so you do not open 10,000 connections at once.
+
+# Node.js: How do you cancel async work?
+
+AbortController. Create one, pass controller.signal to fetch, timers/promises, fs.readFile, events.once, child_process and many libraries, then call controller.abort(). The operation rejects with an AbortError. AbortSignal.timeout(ms) creates a signal that aborts on its own, and AbortSignal.any([a, b]) combines signals. In your own functions, check signal.aborted or listen for the 'abort' event.
+
+# Node.js: How do you find and fix a memory leak?
+
+Typical causes: objects added to a global Map or array and never removed (an unbounded cache), event listeners that are never removed, timers (setInterval) never cleared, closures holding large objects, and requests stored on long-lived objects.
+Finding it: watch process.memoryUsage() or container memory grow under steady load; start with --inspect and take two or three heap snapshots in Chrome DevTools a few minutes apart, then compare them to see which objects keep growing; tools like clinic.js heapprofiler help. Fixes: bounded caches (an LRU with a max size and TTL), WeakMap for metadata keyed by objects, removing listeners in cleanup, and streaming instead of buffering big payloads. --max-old-space-size raises the heap limit but does not fix a leak.
+
+# Node.js: How do you shut a server down gracefully?
+
+On SIGTERM (sent by Docker and Kubernetes) and SIGINT (Ctrl+C):
+1. Stop accepting new connections: server.close(). In Kubernetes, fail the readiness probe first so traffic stops being routed.
+2. Let in-flight requests finish. server.closeIdleConnections() closes idle keep-alive sockets.
+3. Close resources: database pools, Redis, message consumers, WebSockets.
+4. Exit with process.exit(0), with a hard timeout (for example 10 s) in case something hangs.
+In NestJS: app.enableShutdownHooks() plus onModuleDestroy or beforeApplicationShutdown hooks. Also run Node as PID 1 carefully (use node directly or tini) so signals reach it.
+
+# Node.js: npm install vs npm ci, and the lock file
+
+npm install resolves versions from package.json ranges, may update package-lock.json, and adds to an existing node_modules. npm ci deletes node_modules and installs exactly what package-lock.json says, failing if it does not match package.json. Use npm ci in CI and Docker for reproducible builds. Commit the lock file for applications.
+Semver ranges: ^1.2.3 allows 1.x.x from 1.2.3 (minor and patch updates), ~1.2.3 allows 1.2.x (patch only), 1.2.3 is exact. For 0.x versions, ^0.2.3 only allows 0.2.x. dependencies are needed at runtime, devDependencies only for building and testing, peerDependencies must be provided by the host project (plugins).
+
+# Node.js: Useful built-in features in modern Node (20 to 24)
+
+- Global fetch, Request, Response, Headers, FormData (stable since Node 21).
+- node:test test runner and node:assert, with mocking, coverage and watch mode.
+- --watch to restart on file changes, replacing nodemon for simple cases.
+- --env-file=.env and process.loadEnvFile() to load .env files without dotenv.
+- import.meta.dirname and import.meta.filename in ES modules.
+- require(esm) without a flag (22.12+).
+- Type stripping: Node runs .ts files directly by removing type annotations (unflagged since 23.6 and 22.18). Only "erasable" syntax works: no enums, no namespaces with values, no parameter properties. TypeScript 5.8's erasableSyntaxOnly flag enforces that.
+- Permission model: --permission with --allow-fs-read, --allow-fs-write and similar.
+- AbortSignal.timeout, structuredClone, WebSocket client (global since 22), navigator.
+Even-numbered major versions become LTS (long-term support); use an LTS line in production.
+
+# Node.js: How do you secure a Node.js API?
+
+- Validate all input at the edge (zod, class-validator) and whitelist fields to avoid mass assignment.
+- Parameterized queries or an ORM, never string-built SQL (SQL injection).
+- Hash passwords with bcrypt, scrypt or argon2, never encrypt or store them plainly.
+- Authentication plus authorization on every route: check that the user may touch this specific resource (the IDOR problem).
+- Rate limit login and expensive endpoints; lock out or slow down brute force.
+- Security headers with helmet; a strict CORS allow-list.
+- Secrets in environment variables or a secret manager, never in git.
+- npm audit, Dependabot or Renovate; pin and review dependencies (supply chain attacks).
+- Avoid prototype pollution (do not deep-merge untrusted JSON into objects), ReDoS (catastrophic regexes on user input), and path traversal (normalise and check user-provided file paths).
+- Limit body size, set timeouts, do not leak stack traces in error responses, log security events.
+
+# Node.js: JWT vs server-side sessions
+
+Session: the server stores session data (in Redis or a database) and the browser holds an opaque id in an httpOnly cookie. Easy to revoke (delete the session), but needs shared storage across instances.
+JWT: a signed token (header.payload.signature) holding claims such as sub (user id) and exp (expiry). The server verifies the signature and needs no lookup, which suits several services. Downsides: hard to revoke before expiry, so access tokens are short-lived (5 to 60 minutes) and paired with a refresh token that can be rotated and revoked. The payload is only base64-encoded, not encrypted, so never put secrets in it.
+Storage: localStorage is readable by any script (XSS risk); an httpOnly, Secure, SameSite cookie is not, but then you need CSRF protection (SameSite plus a CSRF token for unsafe methods).
+
+# Node.js: What is CORS?
+
+CORS (Cross-Origin Resource Sharing) is a browser rule. A page from origin A (scheme + host + port) can only read responses from origin B if B answers with Access-Control-Allow-Origin naming A (or *). For "non-simple" requests (methods other than GET, HEAD, POST, custom headers like Authorization, or a JSON content type), the browser first sends an OPTIONS preflight request. Cookies need credentials: 'include' on the client plus Access-Control-Allow-Credentials: true and an explicit origin (not *). CORS protects users in browsers; it is not server security, because curl and server-to-server calls ignore it. A dev proxy (Vite's server.proxy, or Next.js rewrites) avoids CORS by making requests same-origin.
+
+# Node.js: REST basics: methods, idempotency and status codes
+
+- GET reads (safe, idempotent, cacheable). POST creates or triggers an action (not idempotent). PUT replaces a resource (idempotent). PATCH updates part of it. DELETE removes it (idempotent).
+- Idempotent means repeating the request leaves the same state. For POSTs that must not repeat (payments), accept an Idempotency-Key header and store the result.
+- Common status codes: 200 OK, 201 Created (with a Location header), 204 No Content, 400 Bad Request (validation), 401 Unauthorized (not authenticated), 403 Forbidden (authenticated but not allowed), 404 Not Found, 409 Conflict (for example duplicate email), 422 Unprocessable Content, 429 Too Many Requests, 500 Internal Server Error, 502/503/504 for gateway and availability problems.
+- Pagination: offset/limit is simple but slow on deep pages and unstable when rows are inserted; cursor (keyset) pagination using the last seen id or timestamp is stable and fast.
+
+# Node.js: How do you scale a Node.js app?
+
+- Vertical: more CPU per process does little for one thread, so run one process per core (cluster, PM2, or several containers).
+- Horizontal: many stateless instances behind a load balancer. Keep no state in memory: sessions in Redis, uploads in object storage.
+- WebSockets and Socket.IO across instances: an adapter (the Redis adapter, using pub/sub) so emitting to a room reaches clients connected to other instances, plus sticky sessions if HTTP long-polling is enabled.
+- Caching (Redis, HTTP caching with Cache-Control and ETag, a CDN).
+- Move slow work to background jobs and queues.
+- Database: connection pooling, indexes, read replicas, avoiding N+1 queries.
+- Measure first: p95/p99 latency, event loop lag (perf_hooks.monitorEventLoopDelay), CPU and memory.
+
+# Node.js: Caching strategies
+
+- Cache-aside (lazy loading): read the cache; on a miss read the database and store the value with a TTL. On writes, update the database and delete (or update) the cache key. The most common pattern.
+- Write-through: every write goes to the cache and the database together.
+- Write-behind: write to the cache, flush to the database later (fast, risk of loss).
+Problems: stale data (invalidate on write, keep TTLs short), cache stampede (many requests miss at once and all hit the database; fix with a lock, request coalescing, or early refresh), and invalidating lists that contain an updated item. Deleting the key on write is usually safer than writing the new value, because two concurrent writers can store values in the wrong order.
+
+# Node.js: Database questions: pooling, N+1, transactions, indexes
+
+- Connection pool: opening a Postgres connection is expensive, so the driver keeps a pool (pg.Pool) and reuses connections. Size it below the database's max_connections divided by the number of instances. PgBouncer helps with many instances or serverless.
+- N+1: loading a list (1 query) and then a relation for each item (N queries). Fix with a JOIN, eager loading, WHERE id IN (...), or DataLoader batching in GraphQL.
+- Transactions: group writes that must succeed or fail together (ACID). Know isolation levels (read committed is Postgres's default) and use SELECT ... FOR UPDATE or optimistic locking with a version column for concurrent updates.
+- Indexes: B-tree indexes on columns used in WHERE, JOIN and ORDER BY. They speed up reads and slow down writes. Use EXPLAIN ANALYZE to check a query plan. Foreign key columns are not indexed automatically in Postgres.
+- Migrations: versioned schema changes in code, run in CI and deploys, never synchronize: true in production.
+
+# Node.js: Express middleware and error handling
+
+Middleware is a function (req, res, next) that runs in the order it was registered. It can change req/res, end the response, or call next() to pass control on. app.use(fn) applies to every path; router-level middleware applies to a router. Error-handling middleware has four arguments (err, req, res, next) and must be registered after the routes; next(err) skips to it. Common middleware: express.json() body parsing, helmet, cors, compression, a logger (pino-http), authentication. Express 5 (stable since 2024) catches rejected promises from async handlers, changed path matching syntax, and removed several deprecated APIs.
+
+# NestJS: What are modules, providers and dependency injection?
+
+NestJS structures an app into modules (@Module) that declare controllers (HTTP routes), providers (services, repositories, factories, anything injectable), imports (other modules) and exports (providers that importing modules may use). Nest's IoC container creates providers and injects them through constructor parameters, using TypeScript's emitted type metadata (emitDecoratorMetadata). Custom providers use tokens: { provide: 'REDIS', useFactory: () => new Redis() }, injected with @Inject('REDIS'). Providers are singletons by default; scopes REQUEST and TRANSIENT exist but cost performance. @Global() makes a module's exports available everywhere. Dynamic modules (forRoot, forRootAsync, forFeature) configure a module at import time. Circular dependencies are solved with forwardRef(), but are usually a design smell.
+
+# NestJS: What is the request lifecycle? Guards vs interceptors vs pipes vs filters
+
+Order for an incoming request: middleware, then guards, then interceptors (before the handler), then pipes, then the route handler, then interceptors (after, on the response), and exception filters if anything throws.
+- Middleware: Express-style, no knowledge of the handler. Logging, raw body parsing.
+- Guards (CanActivate): decide whether the request may continue (authentication, roles). They know the handler via ExecutionContext and can read metadata set with decorators (Reflector).
+- Interceptors: wrap the handler with RxJS. Transform the response, add caching, timing, timeouts.
+- Pipes: validate and transform input (ValidationPipe, ParseIntPipe).
+- Exception filters: turn thrown exceptions into responses. HttpException subclasses like NotFoundException become JSON { statusCode, message, error }.
+Each can be applied globally, per controller or per route.
+
+# NestJS: How does validation work with DTOs?
+
+DTO classes are decorated with class-validator rules (@IsString, @IsEmail, @Length, @IsOptional, @IsIn). A global ValidationPipe validates each incoming body or param against the DTO and returns 400 with the list of messages on failure. whitelist: true strips properties without decorators (forbidNonWhitelisted: true rejects them instead). transform: true turns the plain object into a DTO instance and converts primitive types (with @Type(() => Date) from class-transformer for nested or date values). PartialType, PickType, OmitType and IntersectionType from @nestjs/mapped-types (or @nestjs/swagger) derive update DTOs and keep the validators. Validation needs a class: an inline type or interface has no runtime metadata, so it cannot be validated.
+
+# NestJS: How do WebSocket gateways work?
+
+A class decorated with @WebSocketGateway() listens for Socket.IO (or ws) connections, by default on the HTTP server's port. @SubscribeMessage('event') marks a handler; @MessageBody() and @ConnectedSocket() inject the payload and the client. Returning { event, data } sends a reply to the sender only. @WebSocketServer() gives the server instance for broadcasting: server.to(room).emit(...). Lifecycle interfaces: OnGatewayInit, OnGatewayConnection (handleConnection) and OnGatewayDisconnect. Guards, pipes and filters also work on gateways, but they run per message, not on the connection itself, so token checks at connect time go in handleConnection (or a Socket.IO middleware) and should disconnect the client on failure. Rooms are per server instance; several instances need the Redis adapter.
+
+# JavaScript fundamentals often asked in Node interviews
+
+- var is function-scoped and hoisted with undefined; let and const are block-scoped and in the temporal dead zone until declared. const prevents reassignment, not mutation.
+- A closure is a function that keeps access to variables of the scope it was created in, even after that scope returns. Used for private state and factories; the classic bug is var in a loop with async callbacks.
+- this depends on how a function is called; arrow functions take this from the surrounding scope. bind, call and apply set it explicitly.
+- == converts types before comparing, === does not. Use ===.
+- Prototypal inheritance: objects delegate property lookups along the prototype chain; class is syntax over that.
+- Event delegation, debounce and throttle, deep vs shallow copy (structuredClone for a deep copy), and the difference between null and undefined are also common.
+
+# Next.js: What is Next.js and what does it add on top of React?
+
+Next.js is a React framework by Vercel. It adds file-system routing, server rendering (SSR), static generation (SSG) and incremental regeneration (ISR), React Server Components, Server Actions, data caching, route handlers (API endpoints), image, font and script optimisation, code splitting per route, a bundler (Turbopack is the default since Next 16) and deployment output for Node servers, Docker (standalone) or static hosting. Plain React (with Vite) renders only in the browser unless you add these yourself.
+
+# Next.js: App Router vs Pages Router
+
+Pages Router (pages/ directory, the original): each file is a route; data is fetched with getServerSideProps (per request), getStaticProps (at build time, with revalidate for ISR) and getStaticPaths; API routes live in pages/api; _app and _document wrap pages. All components are client components (rendered on the server, then hydrated).
+
+App Router (app/ directory, stable since Next 13.4): folders define routes and page.tsx makes a route public; nested layouts that keep state between navigations; React Server Components by default; data fetched directly in async components; loading.tsx and error.tsx built on Suspense and error boundaries; Server Actions for mutations; route.ts route handlers. New projects use the App Router; both can live in one app during a migration.
+
+# Next.js: Server Components vs Client Components
+
+In the App Router every component is a Server Component unless its file (or a file that imports it) starts with "use client".
+
+Server Components run only on the server (at build or request time). They can be async, read databases and secrets directly, and ship no JavaScript to the browser. They cannot use state, effects, event handlers or browser APIs.
+
+Client Components are marked with "use client" at the top of a file; that marks a boundary, and everything that file imports becomes client code too. They are still rendered to HTML on the server first, then hydrated in the browser, and can use useState, useEffect, onClick and window.
+
+Rules: keep "use client" as low in the tree as possible (a small interactive button, not the whole page). Props passed from server to client must be serializable (no functions, except Server Actions). A Client Component cannot import a Server Component, but it can receive one as children or another prop. Use the server-only package to make sure a module never ends up in client code.
+
+# Next.js: What are Server Actions (Server Functions)?
+
+An async function marked with "use server" (at the top of the function body, or of a file to mark all its exports). It runs on the server but can be called from the client: passed to <form action={fn}> (works before JavaScript loads, progressive enhancement) or called from a Client Component like a normal async function. Next sends a POST request under the hood. Typical body: validate the input (with zod), check the user's session and permissions, write to the database, then revalidatePath or revalidateTag (or redirect). Treat every Server Action as a public API endpoint: anyone can call it with any arguments, so always authenticate, authorize and validate inside it. React 19 helpers: useActionState (pending state and result of an action), useFormStatus (pending state inside a form) and useOptimistic.
+
+# Next.js: SSR vs SSG vs ISR vs CSR
+
+- SSG (static site generation): HTML built at build time and served from a CDN. Fastest; data can be stale.
+- ISR (incremental static regeneration): static pages that are regenerated in the background after a time (export const revalidate = 60) or on demand (revalidatePath, revalidateTag). The first request after expiry gets the old page and triggers a rebuild (stale-while-revalidate).
+- SSR (server-side rendering): HTML rendered on every request. Always fresh, slower, needs a server.
+- CSR (client-side rendering): the server sends an empty shell and JavaScript fetches data in the browser. Bad for SEO and first paint, fine for logged-in dashboards.
+In the App Router you do not pick a function: a route is static unless it uses something request-specific (cookies(), headers(), searchParams, connection(), uncached data), which makes it dynamic. Streaming lets a dynamic page send its shell first and fill in slow parts later.
+
+# Next.js: How does data fetching work in the App Router?
+
+Fetch data directly in async Server Components: const posts = await db.post.findMany() or await fetch(url). No useEffect, no API route needed for your own pages. Several requests in one component should start in parallel (Promise.all) to avoid waterfalls. Requests for the same data in a layout and a page are deduplicated: fetch with the same URL and options is memoised within one render, and for database calls you wrap the function in React's cache(). Wrap slow parts in <Suspense fallback={...}> so the rest of the page streams first. Client-side fetching (TanStack Query, SWR) is still used for data that changes after load, polling and infinite scrolling.
+
+# Next.js: Caching in Next.js 15 and 16
+
+Next 14 cached aggressively by default, which confused many people. Next 15 changed the defaults: fetch requests are no longer cached by default (opt in with cache: 'force-cache' or next: { revalidate }), GET route handlers are not cached by default, and the client router cache no longer reuses page segments by default (staleTime 0).
+
+Next 16 introduced Cache Components (enabled with cacheComponents: true in next.config). Caching becomes explicit with the "use cache" directive on a page, component or function, with cacheLife('hours') for the lifetime and cacheTag('posts') to label entries. Everything else is dynamic by default. This also delivers Partial Prerendering: a static shell served instantly with dynamic parts streamed into Suspense holes. Invalidation: revalidateTag(tag, profile) for stale-while-revalidate (Next 16 asks for a cacheLife profile as the second argument), updateTag(tag) inside Server Actions for read-your-own-writes, refresh() to refresh uncached data, and revalidatePath(path).
+
+The four layers to name in an interview: request memoisation (per render), the data cache (fetch results across requests), the full route cache (rendered HTML and RSC payload) and the client router cache (in the browser).
+
+# Next.js: What changed in Next.js 15?
+
+- Async request APIs: cookies(), headers(), draftMode(), and the params and searchParams props are now Promises and must be awaited.
+- Caching defaults reversed (see the caching question): fetch, GET route handlers and the client router cache are not cached by default.
+- React 19 support, including useActionState and the React Compiler (experimental then).
+- Turbopack stable for next dev (next dev --turbo).
+- next/form component, after() to run work after the response is sent, instrumentation.js stable, and a better hydration error display.
+- next.config.ts supported (TypeScript config).
+
+# Next.js: What changed in Next.js 16?
+
+Released October 2025:
+- Cache Components and the "use cache" directive, making caching opt-in and explicit; Partial Prerendering is folded into it.
+- middleware.ts is renamed proxy.ts (export function proxy), to make clear it is a network-boundary proxy. proxy runs on the Node.js runtime.
+- Turbopack is the default bundler for both next dev and next build (webpack still available with a flag).
+- New cache APIs: updateTag(), refresh(), and revalidateTag() taking a cacheLife profile.
+- React 19.2 features (View Transitions, useEffectEvent, <Activity>), and stable support for the React Compiler (reactCompiler option).
+- Removed: AMP support, the next lint command, and synchronous access to params/cookies/headers (they must be awaited). Minimum Node.js version 20.9.
+- Navigation improvements: layout deduplication and incremental prefetching.
+
+# Next.js: App Router file conventions
+
+Inside a route folder:
+- page.tsx: the UI of the route; without it the folder is not a route.
+- layout.tsx: shared UI that wraps children and keeps its state across navigations. The root layout (with <html> and <body>) is required.
+- template.tsx: like a layout but re-mounted on every navigation.
+- loading.tsx: shown while the page loads (an automatic Suspense boundary).
+- error.tsx: an error boundary for the segment; must be a Client Component; receives error and a reset function to retry. global-error.tsx catches errors in the root layout.
+- not-found.tsx: rendered when notFound() is called or no route matches.
+- route.ts: an API endpoint exporting GET, POST and so on (cannot sit next to page.tsx in the same folder).
+- default.tsx: fallback for parallel routes.
+Folder naming: [id] dynamic segment, [...slug] catch-all, [[...slug]] optional catch-all, (group) route group that does not affect the URL, _private ignored by routing, @slot parallel route, (.)photo / (..)photo intercepting routes (for example, a modal over a list).
+
+# Next.js: Dynamic routes, generateStaticParams and metadata
+
+A folder [slug] receives params in page.tsx. In Next 15+ params is a Promise: export default async function Page({ params }: { params: Promise<{ slug: string }> }) { const { slug } = await params; }.
+generateStaticParams() returns the list of params to prerender at build time, for example every blog post slug. Unknown params are rendered on demand (set dynamicParams = false to return 404 instead).
+SEO metadata: export a static metadata object (title, description, openGraph) from a layout or page, or an async generateMetadata({ params }) for data-dependent titles. Special files: opengraph-image.tsx, sitemap.ts, robots.ts, icon.png, manifest.ts.
+
+# Next.js: Middleware (now proxy.ts) and when to use it
+
+proxy.ts (middleware.ts before Next 16) sits at the project root and runs before a request reaches a route. It can redirect, rewrite, set headers and cookies, and is filtered with config.matcher. Uses: redirecting signed-out users to /login, locale detection, A/B testing, rewriting to another backend, adding security headers. It should be fast and should not do heavy database work.
+
+Do not rely on it as your only authorization check. In March 2025, CVE-2025-29927 allowed attackers to skip middleware entirely by sending an internal x-middleware-subrequest header (fixed in 12.3.5, 13.5.9, 14.2.25 and 15.2.3). The recommended pattern: an optimistic check in middleware or proxy for redirects, and a real check in a Data Access Layer next to every data read and in every Server Action.
+
+# Next.js: Route Handlers vs Server Actions vs API routes
+
+- Route Handlers (app/api/x/route.ts) export functions named after HTTP methods using the Web Request and Response APIs. Use them for webhooks, endpoints called by mobile apps or third parties, file downloads and streaming responses.
+- Server Actions are for mutations triggered from your own UI (forms, buttons). There is no URL to design, they integrate with revalidation and progressive enhancement, but they always use POST and are not meant for reading data.
+- API routes (pages/api) are the Pages Router equivalent of Route Handlers.
+For reading data in your own pages, use neither: fetch in a Server Component.
+
+# Next.js: How do you handle authentication in the App Router?
+
+Common choices: Auth.js (NextAuth), Clerk, Better Auth, Lucia-style hand-rolled sessions, or a backend that issues JWTs. Store the session in an httpOnly, Secure, SameSite cookie. Read it on the server with await cookies(). Put the checks in a Data Access Layer: one module with functions like getCurrentUser() and getProject(id) that verify the session and the permission before returning data, wrapped in React's cache() so it runs once per request. Call it from Server Components, Server Actions and Route Handlers. Use proxy (middleware) only for fast redirects. Never pass secrets or full user records to Client Components; send only the fields the UI needs (consider the taint APIs).
+
+# Next.js: Environment variables
+
+.env, .env.local, .env.development and .env.production are loaded automatically (.env.local is git-ignored and overrides the rest). Variables are server-only by default. Only names starting with NEXT_PUBLIC_ are exposed to the browser, and they are inlined into the JavaScript at build time, so changing one requires a rebuild, and a Docker image built once cannot read a different NEXT_PUBLIC_ value at runtime. For runtime-configurable client values, read them on the server and pass them down as props. Never put secrets in NEXT_PUBLIC_ variables.
+
+# Next.js: next/image, next/font, next/link and next/script
+
+- next/image: resizes, converts to WebP or AVIF, lazy-loads and serves responsive srcset. It needs width and height (or fill) to avoid layout shift; set sizes for responsive images and give the hero (LCP) image high priority. Remote images must be allowed in images.remotePatterns.
+- next/font: downloads Google or local fonts at build time and self-hosts them, with no layout shift (size-adjust fallback) and no request to Google from the browser.
+- next/link: client-side navigation with automatic prefetching of routes in the viewport (in production).
+- next/script: loading strategies for third-party scripts (beforeInteractive, afterInteractive, lazyOnload, worker).
+
+# Next.js: What causes hydration errors and how do you fix them?
+
+Hydration is React attaching to server-rendered HTML in the browser. It fails when the first client render differs from the server HTML. Causes: Date.now(), new Date() or Math.random() during render; reading window, localStorage or the user's locale and time zone during render; typeof window checks that render different trees; invalid HTML nesting (a <div> inside a <p>, or <a> inside <a>); browser extensions that modify the DOM. Fixes: move browser-only values into useEffect (render a placeholder first), use next/dynamic with ssr: false for browser-only components, format dates with a fixed time zone, fix the HTML nesting, and as a last resort suppressHydrationWarning on a single element (such as a timestamp).
+
+# Next.js: How do you optimise performance?
+
+- Keep components on the server; push "use client" down to small leaves to shrink the JavaScript bundle.
+- Stream with Suspense and loading.tsx; avoid request waterfalls with parallel fetches.
+- Cache explicitly ("use cache", revalidate) and serve static where possible; use a CDN.
+- next/image with sizes and priority for the LCP image; next/font for fonts.
+- next/dynamic (lazy loading) for heavy client components such as charts and editors.
+- Analyse bundles (@next/bundle-analyzer), watch Core Web Vitals (LCP, INP, CLS) with useReportWebVitals or Vercel analytics.
+- Use the React Compiler or targeted memoisation for expensive client re-renders.
+
+# Next.js: Deployment options
+
+- Vercel: zero-config, built by the Next.js team; supports every feature, including ISR and edge.
+- Self-hosting on Node: next build then next start behind a reverse proxy. output: 'standalone' in next.config produces a minimal server folder that copies only the needed node_modules, ideal for Docker images. With several instances, configure a shared cache handler (for example Redis) so ISR and the data cache are consistent.
+- Static export: output: 'export' generates plain HTML/CSS/JS for any static host, without server features (no SSR, Server Actions or ISR).
+- Adapters exist for other platforms (OpenNext for AWS and Cloudflare, Netlify).
+Runtimes: the Node.js runtime (default, full Node API) and the Edge runtime (a smaller Web-API-only runtime, fast cold starts, limited libraries).
+
+# React: Questions that come up in Next.js interviews
+
+- Reconciliation and keys: React compares the new element tree with the previous one; keys tell it which list item is which. Using the array index as key breaks state when items are reordered. Changing a component's key remounts it (a useful way to reset state).
+- useEffect runs after render; the dependency array controls when; return a cleanup function for subscriptions and timers. In development, StrictMode mounts, unmounts and remounts once to expose missing cleanups. Many effects are unnecessary: derive values during render instead.
+- useMemo caches a computed value, useCallback a function, React.memo skips re-rendering a component with the same props. The React Compiler (1.0 since October 2025) adds this memoisation automatically.
+- Context re-renders every consumer when the value changes; split contexts or use a store for frequently changing state.
+- useSyncExternalStore subscribes components to an external store (a socket status, a session object) safely with concurrent rendering.
+- Server state (from an API) is best handled by TanStack Query or SWR (caching, refetching, deduplication, optimistic updates) rather than useState + useEffect.
+- Controlled inputs keep the value in React state; uncontrolled inputs keep it in the DOM (read with a ref or FormData).
+- React 19: Actions, useActionState, useOptimistic, useFormStatus, the use() hook for promises and context, ref as a normal prop (no forwardRef), and document metadata tags rendered anywhere.

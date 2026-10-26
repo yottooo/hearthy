@@ -1,6 +1,6 @@
 {
   "name": "examples",
-  "documents": "../examples/docs",
+  "documents": "../to-ingest",
   "cases": [
     {
       "id": "kettle-e4",

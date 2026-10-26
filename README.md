@@ -21,15 +21,15 @@ through the Pager app. If they don't acknowledge within 15 minutes, the page esc
 Head of Engineering, Mira Petrova.
 
 Sources:
-  [1] examples/docs/emberlight-handbook.md (chunk 3)
+  [1] to-ingest/emberlight-handbook.md (chunk 3)
 
 Also retrieved:
-  [2] examples/docs/emberlight-handbook.md (chunk 1)
-  [3] examples/docs/kettle-k2-manual.md (chunk 2)
+  [2] to-ingest/emberlight-handbook.md (chunk 1)
+  [3] to-ingest/kettle-k2-manual.md (chunk 2)
   ...
 ```
 
-Real output from `llama3.1:8b` on an RTX 3070, using the [example documents](examples/docs).
+Real output from `llama3.1:8b` on an RTX 3070, using the [example documents](to-ingest).
 
 ## How it works
 
@@ -124,13 +124,14 @@ The embedding model (`nomic-embed-text`, ~0.3 GB) is small enough to sit alongsi
 5. Ingest the example documents and ask a question
 
    ```bash
-   hearthy ingest ./examples/docs
+   hearthy ingest ./to-ingest
    hearthy ask "How many days of remote work does Emberlight allow?"
+   hearthy ask "What does error E4 mean on the kettle?"
+   hearthy ask "Who do I page if production is down at night?"
    ```
 
-   The examples describe a made-up kettle and company, so the model can only get these answers
-   right by retrieving them. See [examples/README.md](examples/README.md) for more
-   questions. Then point it at your own folders.
+   The example documents describe a made-up kettle and company, so the model can only get these
+   answers right by retrieving them. Then point it at your own folders.
 
 ## Commands
 
@@ -186,7 +187,7 @@ src/
 ├─ llm/ollama.ts      embeddings + streaming chat via Ollama
 └─ rag/               retrieval, prompt building, `ask`
 test/                 unit tests + pgvector integration test
-examples/docs/        sample documents to try it on
+to-ingest/            sample documents to try it on
 ```
 
 ## Development
