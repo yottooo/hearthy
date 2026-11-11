@@ -135,14 +135,15 @@ The embedding model (`nomic-embed-text`, ~0.3 GB) is small enough to sit alongsi
 
 ## Commands
 
-| Command                     | What it does                                                                       |
-| --------------------------- | ---------------------------------------------------------------------------------- |
-| `hearthy init`              | Creates the schema. Safe to re-run.                                                |
-| `hearthy ingest <path>`     | Adds a file or folder of `.md`/`.txt` files. Skips `node_modules`, `.git`, etc.    |
-| `hearthy ask <question>`    | Answers from your documents. `-k <n>` sets how many passages to retrieve.          |
-| `hearthy ask -c <question>` | Also prints the retrieved passages and their similarity scores (for debugging).    |
-| `hearthy status`            | Checks Postgres, the schema, Ollama and the models, and tells you how to fix them. |
-| `hearthy reset --yes`       | Deletes all ingested documents and the schema.                                     |
+| Command                     | What it does                                                                                      |
+| --------------------------- | ------------------------------------------------------------------------------------------------- |
+| `hearthy init`              | Creates the schema. Safe to re-run.                                                               |
+| `hearthy ingest <path>`     | Adds a file or folder of `.md`/`.txt` files. Skips `node_modules`, `.git`, etc.                   |
+| `hearthy ask <question>`    | Answers from your documents. `-k <n>` sets how many passages to retrieve.                         |
+| `hearthy ask -c <question>` | Also prints the retrieved passages and their similarity scores (for debugging).                   |
+| `hearthy eval [dataset]`    | Scores retrieval and answers against questions with known answers. See [Evaluation](#evaluation). |
+| `hearthy status`            | Checks Postgres, the schema, Ollama and the models, and tells you how to fix them.                |
+| `hearthy reset --yes`       | Deletes all ingested documents and the schema.                                                    |
 
 ## Configuration
 
@@ -174,6 +175,66 @@ All settings are optional and read from `.env` (see [.env.example](.env.example)
   records the model and dimensions, and every command refuses to mix them.
 - **Grounded answers:** the model is told to answer only from the numbered passages and to cite
   them. Sources are always printed, so you can check the answer.
+- **Measured, not guessed:** retrieval and generation are scored separately, so a wrong answer can
+  be traced to the stage that caused it. See [Evaluation](#evaluation).
+
+## Evaluation
+
+"It looks right" is not a measurement, so Hearthy ships with an eval harness. `hearthy eval` runs a
+dataset of questions with known answers through the real pipeline and scores two things separately:
+
+- **Retrieval:** did the passages that contain the answer come back, and how high? Reported as hit
+  rate and MRR (mean reciprocal rank).
+- **Answers:** does the answer contain the expected facts, avoid the forbidden ones, and cite a
+  passage that really holds the evidence? For questions the documents can't answer, the model has
+  to say so instead of guessing.
+
+When a case fails, the output says which stage failed: a retrieval miss (the answer was never
+found) or generation (it was found, then fumbled). That tells you whether to tune chunking and
+retrieval or the prompt and model.
+
+```bash
+hearthy eval                    # run the bundled dataset (evals/examples.json)
+hearthy eval --retrieval-only   # fast: needs only the embedding model
+hearthy eval --repeat 3         # generate each answer 3 times to measure consistency
+hearthy eval --judge            # also grade faithfulness with an LLM judge
+hearthy eval --filter lookup    # only cases whose id or category matches
+```
+
+The bundled dataset has 20 cases in six categories: `lookup`, `paraphrase`, `multi-part`,
+`cross-section`, `false-premise` and `unanswerable`. Each run saves a full JSON report to
+`evals/results/`, so you can compare models, chunk sizes or prompt changes over time.
+
+### Results
+
+`llama3.1:8b` + `nomic-embed-text`, top-5, on the bundled dataset (one run per case):
+
+| Metric               | Result |
+| -------------------- | ------ |
+| Retrieval hit rate   | 100%   |
+| MRR                  | 0.95   |
+| Answers passing      | 90%    |
+| Faithful (LLM judge) | 95%    |
+
+The judge is the same size as the model it grades, so treat faithfulness as a second opinion, not
+ground truth.
+
+### Writing your own cases
+
+```json
+{
+  "id": "kettle-e4",
+  "category": "lookup",
+  "question": "What does error E4 mean on the kettle?",
+  "expect": "answer",
+  "evidence": ["Dry-boil protection triggered"],
+  "mustInclude": [["empty", "dry", "no water"]]
+}
+```
+
+`evidence` is a verbatim snippet that retrieval has to surface. Every group in `mustInclude` must
+match, and a group matches if any of its alternatives appears in the answer. Use
+`"expect": "refuse"` for questions the documents don't answer.
 
 ## Project structure
 
@@ -185,8 +246,10 @@ src/
 ├─ db/                connection + schema migration
 ├─ ingest/            file discovery, chunking, ingest pipeline
 ├─ llm/ollama.ts      embeddings + streaming chat via Ollama
-└─ rag/               retrieval, prompt building, `ask`
+├─ rag/               retrieval, prompt building, `ask`
+└─ eval/              dataset loading, scoring, LLM judge, `eval`
 test/                 unit tests + pgvector integration test
+evals/                eval dataset (questions with known answers)
 to-ingest/            sample documents to try it on
 ```
 
@@ -213,11 +276,11 @@ run `npm test`. CI runs it against a pgvector service container on every push.
 - [x] Streaming, cited answers via Ollama
 - [x] `status` health checks with fix-it hints
 - [x] CI with a real pgvector integration test
+- [x] An evaluation set to measure retrieval quality (`hearthy eval`)
 - [ ] PDF and DOCX loaders
 - [ ] Hybrid search (pgvector + Postgres full-text search)
 - [ ] Reranking retrieved passages
 - [ ] Follow-up questions (chat mode)
-- [ ] An evaluation set to measure retrieval quality
 - [ ] `ingest --watch`
 - [ ] Ollama in Docker Compose with a GPU profile
 - [ ] Web UI
